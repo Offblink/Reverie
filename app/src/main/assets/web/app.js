@@ -168,7 +168,8 @@
     $('in-key').value = '';                 // key 永不回显
     $('in-chat').value = st.chatModel || '';
     $('in-asr').value = st.asrModel || '';
-    $('in-asr-endpoint').value = st.asrEndpoint || '';   // 独立 ASR 端点（M6）：空 = 跟随主端点
+    $('in-asr-mode').value = st.asrMode === 'cloud' ? 'cloud' : 'device';
+    $('in-asr-endpoint').value = st.asrEndpoint || '';   // 云端 ASR 端点：空 = 跟随主端点
     $('in-asr-key').value = '';                          // ASR 独立 key 同样不回显
     // 音色清单来自动态桥（TTS 未就绪时为空 → 提示）
     var vsel = $('in-voice');
@@ -195,6 +196,7 @@
       endpoint: $('in-endpoint').value.trim(),
       chatModel: $('in-chat').value.trim(),
       asrModel: $('in-asr').value.trim(),
+      asrMode: $('in-asr-mode').value,
       asrEndpoint: $('in-asr-endpoint').value.trim(),   // 空 = 清掉=跟随主端点
       ttsVoice: $('in-voice').value,
       ttsRate: parseFloat($('in-rate').value) || 0.9,

@@ -35,6 +35,7 @@ public class StoryEngine {
         float ttsRate();
         String ttsVoice();
         String asrModel();
+        String asrMode();       // "device"=端上模型（默认）| "cloud"=云端 whisper（M7）
         String asrEndpoint();   // 独立 ASR 端点；空 = 跟随 LLM（M6）
         String asrApiKey();     // 独立 ASR key；空 = 跟随 LLM
         int micWindowSec();
@@ -74,6 +75,7 @@ public class StoryEngine {
     private final LlmClient llm = new LlmClient();
     private final AsrRecorder recorder;
     private final WhisperClient whisper = new WhisperClient();
+    private final DeviceAsr deviceAsr;
     private final StoryStore store;
     private final Emitter emitter;
     private final SettingsProvider settings;
@@ -91,6 +93,13 @@ public class StoryEngine {
         this.settings = settings;
         this.emitter = emitter;
         this.recorder = new AsrRecorder(ctx);
+        this.deviceAsr = new DeviceAsr(ctx);
+        // 端上识别预热（拷模型+加载）。先让路 5s：冷启动时它和 TTS 绑定抢 CPU，
+        // 实测抢输会让 TTS 撞 12s 看门狗降级纯文字（M7 复测踩过）
+        new Thread(() -> {
+            try { Thread.sleep(5000); } catch (InterruptedException ignored) { }
+            deviceAsr.init();
+        }, "reverie-asr-init").start();
         this.player = new TtsPlayer(ctx, settings.ttsRate(), new TtsPlayer.Listener() {
             @Override public void onSpeaking(int seg, String text) {
                 emitTts("speaking", seg, text);
@@ -288,15 +297,28 @@ public class StoryEngine {
         recorder.stop();
     }
 
-    /** 检出语音 → 上传 whisper（回调在 OkHttp 线程，回 exec 处理结果） */
-    private synchronized void transcribe(int idx, byte[] wav) {
-        if (!asrActive) return;
-        // 独立 ASR 端点/key（M6）：留空回落 LLM 配置（SPEC §7）
-        String ep = settings.asrEndpoint();
-        if (ep.isEmpty()) ep = settings.endpoint();
-        String key = settings.asrApiKey();
-        if (key.isEmpty()) key = settings.apiKey();
-        whisper.transcribe(ep, key, settings.asrModel(), wav,
+    /** 检出语音 → 转文字（M7：端上模型优先，云端 whisper 回落；回调回 exec 处理结果） */
+    private void transcribe(int idx, byte[] wav) {
+        final String mode;
+        final String ep, key, model;
+        synchronized (this) {
+            if (!asrActive) return;
+            mode = settings.asrMode();
+            ep = settings.asrEndpoint().isEmpty() ? settings.endpoint() : settings.asrEndpoint();
+            key = settings.asrApiKey().isEmpty() ? settings.apiKey() : settings.asrApiKey();
+            model = settings.asrModel();
+        }
+        if ("device".equals(mode)) {
+            try {
+                if (!deviceAsr.ready()) throw new IllegalStateException("识别引擎还在预热，稍后再试");
+                String text = deviceAsr.transcribe(DeviceAsr.wavToFloat(wav));
+                exec.execute(() -> handleHeard(idx, text));
+            } catch (Throwable e) {
+                exec.execute(() -> asrEnded("error", idx, null, null, "端上识别失败: " + e.getMessage()));
+            }
+            return;
+        }
+        whisper.transcribe(ep, key, model, wav,
                 new WhisperClient.Listener() {
                     @Override public void onText(String text) { exec.execute(() -> handleHeard(idx, text)); }
                     @Override public void onError(String msg) { exec.execute(() -> asrEnded("error", idx, null, null, msg)); }
