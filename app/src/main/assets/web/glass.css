@@ -1,0 +1,58 @@
+/* ============================================================
+   Reverie · Liquid Glass（深色适配版，源自 Mobile-Design shared/glass.css）
+   纪律不变：玻璃只属于「浮在内容上的控件层」——正文层永远不透明。
+   睡前场景：底色深（#0B0B10），Regular 配方改为暗色填充（iOS 深色模式同思路）。
+   ============================================================ */
+:root{
+  /* Motion：位移/形变走 spring（~10% 回弹），颜色/透明度走 damped（绝不回弹）。
+     页面级转场是唯一例外——见 zoom.js（fast_out_slow_in，不回弹）。 */
+  --spring:cubic-bezier(.34,1.56,.64,1);
+  --damped:cubic-bezier(.2,0,0,1);
+
+  /* 内容层（不透明） */
+  --bg:#0B0B10;
+  --bg2:#12121A;
+  --ink:#E8E8F0;
+  --ink2:#9A9AAB;
+  --ink3:#5B5B6E;
+  --line:rgba(255,255,255,.08);
+
+  /* 暗色玻璃配方（Regular）：暗填充 + blur24 + 饱和 1.4，边线弱白 */
+  --glass-regular-bg:rgba(24,24,34,.62);
+  --glass-regular-filter:blur(24px) saturate(1.4);
+  --glass-border:rgba(255,255,255,.14);
+  --glass-hairline:inset 0 1px 0 rgba(255,255,255,.10);
+  --glass-shadow:0 10px 34px rgba(0,0,0,.45);
+  /* Reduce Transparency → 不透明回退（可读性不塌） */
+  --glass-fallback-bg:#16161F;
+  --glass-fallback-border:rgba(255,255,255,.12);
+
+  /* 强调色：月光蓝紫，睡前低刺激 */
+  --accent:#8B8CF0;
+  --accent-dim:rgba(139,140,240,.16);
+}
+
+.glass{
+  background:var(--glass-regular-bg);
+  -webkit-backdrop-filter:var(--glass-regular-filter);
+  backdrop-filter:var(--glass-regular-filter);
+  border:.5px solid var(--glass-border);
+  box-shadow:var(--glass-hairline),var(--glass-shadow);
+}
+
+body.reduce-transparency .glass{
+  background:var(--glass-fallback-bg);
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+  border:.5px solid var(--glass-fallback-border);
+  box-shadow:0 8px 26px rgba(0,0,0,.4);
+}
+
+/* 系统关动效 → 全降级 */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms!important;
+    animation-iteration-count:1!important;
+    transition-duration:.01ms!important;
+  }
+}

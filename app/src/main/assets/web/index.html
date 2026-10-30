@@ -4,21 +4,108 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Reverie</title>
-<style>
-  html, body { margin: 0; height: 100%; background: #0B0B10; }
-  body {
-    display: flex; align-items: center; justify-content: center;
-    color: #E8E8F0;
-    font-family: "Noto Serif SC", "Source Han Serif SC", serif;
-    font-size: 20px; letter-spacing: 0.35em;
-    padding: env(safe-area-inset-top) env(safe-area-inset-right)
-             env(safe-area-inset-bottom) env(safe-area-inset-left);
-  }
-  small { display: block; margin-top: 12px; font-size: 11px; letter-spacing: 0.1em;
-          color: #5B5B6E; text-align: center; }
-</style>
+<link rel="stylesheet" href="glass.css">
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div style="text-align:center">Reverie<small>M0 · asset 管道</small></div>
+<div id="screen">
+
+  <!-- ============ 主页 ============ -->
+  <section class="vpage on" id="v-home">
+    <div class="home-head">
+      <div>
+        <h1 class="serif-title">Reverie</h1>
+        <p class="sub">今晚，做一个别人替你写的好梦</p>
+      </div>
+      <button class="icon-btn" id="go-settings" aria-label="设置">⚙</button>
+    </div>
+
+    <div class="sec-label">主 题</div>
+    <div class="theme-grid" id="theme-grid"><!-- app.js 注入 12 主题 --></div>
+
+    <div class="sec-label">长 度</div>
+    <div class="tier-row" id="tier-row">
+      <button class="tier-pill" data-tier="short"><div class="t">短</div><div class="m">≈20 分钟</div></button>
+      <button class="tier-pill" data-tier="medium"><div class="t">中</div><div class="m">≈60 分钟</div></button>
+      <button class="tier-pill" data-tier="long"><div class="t">长</div><div class="m">≈100 分钟</div></button>
+    </div>
+
+    <button class="start-btn off" id="start-btn">开始今晚的梦</button>
+
+    <div class="sec-label">书 架</div>
+    <button class="shelf-item" id="go-shelf" style="border-radius:20px">
+      <div class="row1"><span class="title">继续未完的梦</span><span class="badge" id="shelf-count"></span></div>
+      <div class="meta">点开书架，接着上次中断的地方听下去</div>
+    </button>
+  </section>
+
+  <!-- ============ 书架 ============ -->
+  <section class="vpage fade" id="v-shelf">
+    <div class="home-head">
+      <div>
+        <h1 class="serif-title">书架</h1>
+        <p class="sub">做过的梦都收在这里</p>
+      </div>
+      <button class="icon-btn" data-back aria-label="返回">✕</button>
+    </div>
+    <div class="shelf-list" id="shelf-list"></div>
+    <div class="shelf-empty" id="shelf-empty" hidden>还没有故事，从主页开始一个吧</div>
+  </section>
+
+  <!-- ============ 故事页 ============ -->
+  <section class="vpage" id="v-story">
+    <header class="story-top glass">
+      <button class="icon-btn" data-back aria-label="返回">‹</button>
+      <div class="info">
+        <div class="p1" id="story-p1">尚未开始</div>
+        <div class="p2" id="story-p2">—</div>
+      </div>
+      <button class="icon-btn" id="mic-btn" aria-label="麦克风">🎙</button>
+    </header>
+    <div class="story-flow" id="story-flow"></div>
+    <div class="story-dock" id="story-dock"></div>
+  </section>
+
+  <!-- ============ 设置 ============ -->
+  <section class="vpage fade" id="v-settings">
+    <div class="home-head">
+      <div>
+        <h1 class="serif-title">设置</h1>
+        <p class="sub">LLM 与语音</p>
+      </div>
+      <button class="icon-btn" data-back aria-label="返回">✕</button>
+    </div>
+
+    <div class="sec-label">模 型</div>
+    <div class="set-group glass">
+      <label class="set-row"><div class="lab">BASE URL（OpenAI 兼容）</div>
+        <input id="in-endpoint" placeholder="https://api.openai.com/v1" autocomplete="off"></label>
+      <label class="set-row"><div class="lab">API KEY</div>
+        <input id="in-key" type="password" placeholder="sk-…" autocomplete="off"></label>
+      <label class="set-row"><div class="lab">CHAT MODEL</div>
+        <input id="in-chat" placeholder="gpt-4o-mini" autocomplete="off"></label>
+      <label class="set-row"><div class="lab">ASR MODEL（whisper）</div>
+        <input id="in-asr" placeholder="whisper-1" autocomplete="off"></label>
+    </div>
+
+    <div class="sec-label">播 报</div>
+    <div class="set-group glass">
+      <label class="set-row"><div class="lab">语速（0.7–1.1，睡前 0.9）</div>
+        <input id="in-rate" placeholder="0.9" autocomplete="off"></label>
+      <label class="set-row"><div class="lab">麦克风窗口（秒）</div>
+        <input id="in-mic" placeholder="10" autocomplete="off"></label>
+    </div>
+
+    <div class="set-actions">
+      <button class="set-test" id="test-btn">测试连接</button>
+      <button class="set-save" id="save-btn">保存</button>
+    </div>
+    <p class="tiny" id="set-hint" style="margin-top:14px;text-align:center"></p>
+  </section>
+
+</div>
+<script src="common.js"></script>
+<script src="zoom.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
