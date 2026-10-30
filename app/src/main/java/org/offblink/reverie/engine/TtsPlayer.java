@@ -40,7 +40,7 @@ public final class TtsPlayer extends UtteranceProgressListener
     private static final long NO_START_MS = 15_000;    // 入队后没开读：丢句跳过
     private static final long STUCK_MS = 45_000;       // 开读后 45s 没读完：引擎卡死
     private static final long INIT_TIMEOUT_MS = 12_000;// init 无回调：降级
-    private static final long DEVICE_INIT_TIMEOUT_MS = 90_000; // 端上模型首启拷 137MB+加载
+    private static final long DEVICE_INIT_TIMEOUT_MS = 90_000; // 端上模型首启拷 124MB+加载
 
     public interface Listener {
         void onSpeaking(int seg, String text);   // 某句开读（JS 高亮）
@@ -146,7 +146,7 @@ public final class TtsPlayer extends UtteranceProgressListener
 
     /**
      * 切到端上引擎：系统侧直接放弃（tts 置空防误用），模型后台初始化；
-     * 就绪后 st=ST_OK 起泵。首启拷 137MB+加载模型，90s 硬闸超时即降级。
+     * 就绪后 st=ST_OK 起泵。首启拷 124MB+加载模型，90s 硬闸超时即降级。
      * 在途句缓冲在 undelivered，就绪后照常 pump——切引擎不丢句。
      */
     private synchronized void switchToDeviceLocked(String why) {
@@ -201,7 +201,7 @@ public final class TtsPlayer extends UtteranceProgressListener
         synchronized (this) { if (st == ST_OK && tts != null) tts.setSpeechRate(r); }
     }
 
-    /** 音色切换（M6/M9）：kokoro 音色名（zm_ 或 zf_ 前缀）走端上后端；其余给系统 TTS。找不到该名保持当前。 */
+    /** 音色切换（M6/M9）：内置 VITS 音色名（wnj_male）走端上后端；其余给系统 TTS。找不到该名保持当前。 */
     public synchronized void setVoice(String name) {
         voiceName = name == null ? "" : name;
         int sid = DeviceTts.sidForName(voiceName);
@@ -209,7 +209,7 @@ public final class TtsPlayer extends UtteranceProgressListener
         applyVoiceLocked();
     }
 
-    /** 音色清单（设置页用）：端上后端 → kokoro 中文音色；系统后端 → 系统音色（中文优先） */
+    /** 音色清单（设置页用）：端上后端 → 内置 VITS 音色；系统后端 → 系统音色（中文优先） */
     public synchronized List<String> voices() {
         if (useDevice) return DeviceTts.zhVoiceNames();
         List<String> out = new ArrayList<>();
@@ -226,7 +226,7 @@ public final class TtsPlayer extends UtteranceProgressListener
 
     /**
      * 试听（M9）：念一句固定文案再停下。当前朗读被打断（在途结算为读完）；
-     * 生成中由引擎侧守卫拒绝。name 为 kokoro 音色名时临时用该音色，不改默认。
+     * 生成中由引擎侧守卫拒绝。name 为内置音色名时临时用该音色，不改默认。
      */
     public synchronized boolean previewSpeak(String name) {
         if (st != ST_OK) return false;

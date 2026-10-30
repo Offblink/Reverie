@@ -215,8 +215,9 @@
     $('set-hint').textContent = st.hasKey ? '已配置 key' : '尚未配置 key';
   }
 
-  /** 音色显示名：kokoro 前缀标性别（M9） */
+  /** 音色显示名：端上 VITS 是单男声，kokoro 前缀（旧设置残留）标性别 */
   function voiceLabel(n) {
+    if (n === 'wnj_male') return '男声（wnj，内置）';
     if (/^zm_/.test(n)) return '男声 ' + n;
     if (/^zf_/.test(n)) return '女声 ' + n;
     return n;
@@ -240,7 +241,7 @@
     voiceNames.filter(function (x) { return /^zf_/.test(x); })
       .forEach(function (x) { items.push({ v: x, n: voiceLabel(x) }); });
     voiceNames.filter(function (x) { return !/^z[fm]_/.test(x); })
-      .forEach(function (x) { items.push({ v: x, n: x }); });
+      .forEach(function (x) { items.push({ v: x, n: voiceLabel(x) }); });
 
     items.forEach(function (o) {
       var row = document.createElement('div');
@@ -349,6 +350,49 @@
 
   function tierName(t) { return t === 'medium' ? '中' : t === 'long' ? '长' : '短'; }
 
+  /* ---------- 生成中/朗读准备指示（M11） ----------
+     覆盖三段静默：① newStory 后首句抵达前 ② choose 后同一窗口 ③ 文本已完、TTS 仍在合成。
+     信号：busy 快照（①②）、segment-delta（首句到即撤）、segment-done + tts-state（③）。
+     骨架贴正文末尾，不遮正文；关动效由 glass.css 全局降级 + 本文件的静态形态兜底。 */
+  var LOADING_ID = 'story-loading';
+  var loadPhase = null;      // null | 'text'（等文本）| 'voice'（文本到齐、等开读）
+  var speakingIdx = -1;      // 最近一次 tts speaking 的段号
+  var voiceWaitIdx = -1;     // 文本已完、尚未开读的段号
+  var curStoryId = null;
+
+  function renderLoading() {
+    if (!loadPhase) return;
+    var el = document.createElement('p');
+    el.className = 'seg loading-seg';
+    el.id = LOADING_ID;
+    el.innerHTML = loadPhase === 'text'
+      ? '<div class="bar"></div><div class="bar"></div><div class="bar"></div>' +
+        '<div class="whisper"><span class="dot"></span>正在编织…</div>'
+      : '<div class="whisper"><span class="dot"></span>正在准备朗读…</div>';
+    storyFlow.appendChild(el);
+  }
+
+  function showLoading(phase) {
+    loadPhase = phase;
+    var old = $(LOADING_ID);
+    if (old) old.remove();
+    renderLoading();
+    if (followMode) storyFlow.scrollTop = storyFlow.scrollHeight;
+  }
+
+  function hideLoading() {
+    loadPhase = null;
+    var old = $(LOADING_ID);
+    if (old) old.remove();
+  }
+
+  /** 换故事/开新档：相位与说话段号全部作废 */
+  function resetLoading() {
+    speakingIdx = -1;
+    voiceWaitIdx = -1;
+    hideLoading();
+  }
+
   /** 与 Java splitSentences 同规则切句（高亮按句文本匹配，两边必须一致） */
   function splitSents(t) {
     var out = [], cur = '';
@@ -395,10 +439,11 @@
       fillSpans(p, seg.text);
       storyFlow.appendChild(p);
     });
+    renderLoading();          // 全量重建会清掉骨架 → 按当前相位补回
     storyFlow.scrollTop = storyFlow.scrollHeight;
     // 空故事（首段生成失败留下的档）→ 给重试入口，别开成死页
     if (!st.segments.length) {
-      if (!busy) showRetry('还没有生成内容');
+      if (!busy) { hideLoading(); showRetry('还没有生成内容'); }
       else storyDock.classList.remove('on');   // 正在生成首段：不弹任何坞
       return;
     }
@@ -454,7 +499,15 @@
 
   /* ---------- 引擎事件 ---------- */
   Host.onState = function (st) {
-    if (st && st.story) renderStory(st.story, st.busy);
+    if (st && st.story) {
+      if (st.story.id !== curStoryId) {   // 换故事/开新档：旧相位全部作废
+        curStoryId = st.story.id;
+        resetLoading();
+      }
+      renderStory(st.story, st.busy);
+      // busy 快照 = ①② 的权威信号（请求已发、首句未到）；正在流式（curIdx 有效）时不重复点亮
+      if (st.busy && loadPhase === null && curIdx < 0) showLoading('text');
+    }
     if (st && st.ttsDegraded && !degradedToastShown) {
       degradedToastShown = true;
       toast('这台设备没有中文语音引擎，已切换为纯文字模式');
@@ -486,6 +539,8 @@
     if (!ev) return;
     switch (ev.type) {
       case 'segment-delta': {
+        hideLoading();            // 首句已到：①② 的等待指示立刻撤
+        voiceWaitIdx = -1;
         if (ev.index !== curIdx) {          // 新段第一句 → 开块
           curIdx = ev.index;
           var p = document.createElement('p');
@@ -510,13 +565,19 @@
         if (el2) fillSpans(el2, ev.text);   // 全文重建（切句与 TTS 对齐）
         // 文本到齐≠可以选：等 TTS 念完该段（tts idle）才弹（SPEC §6）
         pendingDock = { index: ev.index, options: ev.options, isFinal: ev.isFinal };
+        // ③ 文本已完但还没开读（合成慢于 LLM）→ 点亮朗读准备；已在读则不打扰
+        if (speakingIdx !== ev.index) { voiceWaitIdx = ev.index; showLoading('voice'); }
+        else voiceWaitIdx = -1;
         break;
       }
       case 'tts-state': {
         if (ev.state === 'speaking') {
+          speakingIdx = ev.index;
+          if (loadPhase === 'voice' && voiceWaitIdx === ev.index) hideLoading();   // 开读了，撤 ③
           highlightSentence(ev.index, ev.text);
         } else if (ev.state === 'idle') {
           clearHighlight();
+          if (voiceWaitIdx === ev.index) { voiceWaitIdx = -1; hideLoading(); }
           if (pendingDock && pendingDock.index === ev.index) {
             var pd = pendingDock;
             pendingDock = null;
@@ -533,6 +594,7 @@
           replaying = false;
           toast('重听结束');
         } else if (ev.state === 'degraded') {
+          if (loadPhase === 'voice') hideLoading();   // 纯文字档：没有开读可言
           if (!degradedToastShown) {
             degradedToastShown = true;
             toast('这台设备没有中文语音引擎，已切换为纯文字模式');
@@ -582,6 +644,8 @@
       }
       case 'story-done': break;
       case 'error': {
+        hideLoading();            // 失败/重试坞接管，避免骨架与重试按钮同屏
+        voiceWaitIdx = -1;
         if (ev.stage === 'llm') { pendingDock = null; showRetry(ev.msg); }
         else toast(ev.msg);
         break;
@@ -651,6 +715,7 @@
 
   /* ---------- 桥自检 ---------- */
   syncStart();
-  var st = bridge('getState');
-  console.log('reverie:app state=' + JSON.stringify(st));
+  var bootSt = bridge('getState');
+  console.log('reverie:app state=' + JSON.stringify(bootSt));
+  if (bootSt) Host.onState(bootSt);   // 页面重载时补渲染（含生成中 → 骨架）
 })();

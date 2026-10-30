@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 自适应图标背景：取图标主体（深蓝玻璃片）外缘的夜色，遮罩怎么切都无缝 -->
+    <color name="ic_launcher_background">#050C22</color>
+</resources>

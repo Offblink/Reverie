@@ -130,6 +130,33 @@ button { font-family: inherit; color: inherit; background: none; border: 0; curs
 .seg .cur { color: #FFFFFF; border-radius: 4px; background: rgba(139,140,240,.18); }
 .seg .sent { transition: background .15s var(--damped), color .15s var(--damped); }
 
+/* 生成/朗读准备指示（M11）：贴在正文末尾，不遮正文。
+   三段静默各有相位：text=等下一段文本（骨架），voice=文本已完在等开读（点+文案）。 */
+.loading-seg { pointer-events: none; }
+.loading-seg .bar {
+  height: 13px; border-radius: 7px; margin: 13px 0;
+  background: linear-gradient(90deg, rgba(255,255,255,.05), rgba(255,255,255,.13), rgba(255,255,255,.05));
+  background-size: 200% 100%;
+  animation: shimmer 1.9s var(--damped) infinite;
+}
+.loading-seg .bar:nth-child(2) { width: 92%; }
+.loading-seg .bar:nth-child(3) { width: 64%; }
+.loading-seg .whisper {
+  display: flex; align-items: center; gap: 8px; margin-top: 4px;
+  font-size: 12px; letter-spacing: .18em; color: var(--ink3);
+}
+.loading-seg .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  animation: breathe 1.5s var(--damped) infinite;
+}
+@keyframes shimmer { 0%,100% { background-position: 100% 0; opacity: .7 } 50% { background-position: 0 0; opacity: 1 } }
+@keyframes breathe { 0%,100% { opacity: .25; transform: scale(.75) } 50% { opacity: 1; transform: scale(1.2) } }
+/* 系统关动效（glass.css 已把 animation-duration 压到 0.01ms）：换成静态可见形态 */
+@media (prefers-reduced-motion: reduce) {
+  .loading-seg .bar { background: rgba(255,255,255,.10); opacity: 1; }
+  .loading-seg .dot { background: var(--ink2); }
+}
+
 /* 底部选项坞（玻璃浮层） */
 .story-dock {
   flex: none; padding: 12px 16px max(16px, env(safe-area-inset-bottom));

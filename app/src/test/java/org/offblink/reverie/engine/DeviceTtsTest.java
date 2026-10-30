@@ -28,27 +28,24 @@ public class DeviceTtsTest {
     }
 
     @Test
-    public void voiceNameToSidMatchesKokoroOrder() {
-        // v1.1-zh voices.bin：0-2 en / 3-57 女 / 58-102 男；默认男声 zm_010 = sid 59
-        assertEquals(103, DeviceTts.VOICE_NAMES.length);
-        assertEquals(3, DeviceTts.sidForName("zf_001"));
-        assertEquals(58, DeviceTts.sidForName("zm_009"));
-        assertEquals(59, DeviceTts.sidForName("zm_010"));
-        assertEquals(59, DeviceTts.DEFAULT_SID);
-        assertEquals(102, DeviceTts.sidForName("zm_100"));
+    public void voiceNameToSidIsSingleVitsSpeaker() {
+        // fanchen-wnj：单说话人成年男声，sid 恒 0（M11）
+        assertEquals(1, DeviceTts.VOICE_NAMES.length);
+        assertEquals(0, DeviceTts.DEFAULT_SID);
+        assertEquals(0, DeviceTts.sidForName("wnj_male"));
+        // 旧 Kokoro 音色名（设置里可能还存着）→ 查不到 → 回落默认男声
+        assertEquals(-1, DeviceTts.sidForName("zm_010"));
+        assertEquals(-1, DeviceTts.sidForName("zf_001"));
         assertEquals(-1, DeviceTts.sidForName("nope"));
         assertEquals(-1, DeviceTts.sidForName(null));
-        assertEquals(-1, DeviceTts.sidForName(""));   // M8 时代残留音色名 → 回落默认男声
+        assertEquals(-1, DeviceTts.sidForName(""));
     }
 
     @Test
-    public void zhVoiceNamesSkipEnglishVoices() {
+    public void zhVoiceNamesListsTheOneSpeaker() {
         java.util.List<String> v = DeviceTts.zhVoiceNames();
-        assertEquals(100, v.size());                 // 55 女 + 45 男
-        assertEquals("zf_001", v.get(0));
-        int males = 0;
-        for (String s : v) if (s.startsWith("zm_")) males++;
-        assertEquals(45, males);
+        assertEquals(1, v.size());
+        assertEquals("wnj_male", v.get(0));
     }
 
     @Test

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标（minSdk 26，无需 legacy mipmap-*dpi）：
+     前景 = 108dp 画布上居中 76dp 的玻璃月牙片（432×432 PNG，圆角外 alpha=0），
+     背景 = 纯夜色 #050C22。见 docs 或 SPEC「图标」一节。 -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

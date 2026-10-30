@@ -10,8 +10,8 @@ import android.util.Log;
 import com.k2fsa.sherpa.onnx.GeneratedAudio;
 import com.k2fsa.sherpa.onnx.OfflineTts;
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig;
-import com.k2fsa.sherpa.onnx.OfflineTtsKokoroModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig;
+import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -23,17 +23,23 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 端上中文 TTS（M9，sherpa-onnx v1.13.8 OfflineTts + Kokoro v1.1-zh int8）。
+ * 端上中文 TTS（M11，sherpa-onnx v1.13.8 OfflineTts + VITS zh fanchen-wnj）。
  *
- * M9 换代：M8 的 VITS fanchen-C 被用户否掉——人机感重、停顿不对、默认 0 号是小孩声。
- * Kokoro 是现代架构（transformer 声学 + 韵律建模），自然度显著更好；v1.1-zh 带
- * 100 个中文音色（55 女 + 45 男），默认 zm_010（官方 README 示例男声，sid 59）。
+ * M11 换代：Kokoro v1.1-zh 真机 RTF 稳定 2–4（合成耗时 = 音频时长 2–4 倍），
+ * 句间必然断粮。VITS fanchen-wnj 参数量约为 Kokoro 的 1/3 且非自回归单次前向，
+ * 同机 RTF 预期降 2–4 倍。代价：单说话人（成年男声）+ 自然度不如 Kokoro。
+ * 旧 Kokoro 资产仍在 git（M9 提交 `563ec98` 前的 assets/tts_model 树），可一键回退。
  *
- * 模型在 assets/tts_model/（onnx 因 GitHub 100MiB 限制分两块，init 时拼接），
- * init 拷到 filesDir；init 必须在后台线程调（首启拷 200MB + 加载，秒级到十秒级）。
+ * 模型在 assets/tts_model/（onnx 121MB 因 GitHub 100MiB 限制分两块，init 时拼接），
+ * init 拷到 filesDir；init 必须在后台线程调（首启拷 137MB + 加载，秒级到十秒级）。
+ *
+ * 与 Kokoro 的接线差异（别照抄）：
+ *  - VITS 需要 rule FSTs（date/number/phone/new_heteronym）——Kokoro 相反，传了会打断注音查表；
+ *  - lexicon.txt 是拼音表（Kokoro 是注音表），采样率 16000；
+ *  - 单说话人 → numSpeakers=1，sid 恒 0。
  *
  * 管线（两线程，句间无空隙 + 句尾固定静音垫）：
- *   worker：  队列取句 → generate（CPU 合成）→ 句尾垫 450ms 静音 → 送 playQueue
+ *   worker：  队列取句 → generate（CPU 合成）→ 句尾垫静音 → 送 playQueue
  *   player：  取音频 → AudioTrack 播 → onStart(id) 开播 / onDone(id) 播完
  *
  * stop() 语义与系统 TTS 一致：在途句不再回调 onDone（TtsPlayer 手动结算）。
@@ -43,13 +49,18 @@ public final class DeviceTts {
     private static final String TAG = "reverie-tts-dev";
 
     // assets → filesDir 的幂等校验（换模型时同步改）；onnx 在 assets 里分块，这里拼接后的总长
-    private static final String ONNX = "model.int8.onnx";
+    private static final String ONNX = "model.onnx";
     private static final String ONNX_A = "model.onnx.0";
     private static final String ONNX_B = "model.onnx.1";
-    private static final long ONNX_BYTES = 114203914L;
-    private static final long VOICES_BYTES = 53790720L;
-    private static final long LEXICON_BYTES = 2120131L;
-    private static final long TOKENS_BYTES = 1111L;
+    private static final long ONNX_BYTES = 121076185L;
+    private static final long LEXICON_BYTES = 2457843L;
+    private static final long TOKENS_BYTES = 331L;
+
+    /** 中文文本正规化的 rule FST（VITS 必须有：日期/数字/多音字/电话读法） */
+    private static final String[] FST_FILES = {
+            "date.fst", "number.fst", "phone.fst", "new_heteronym.fst",
+    };
+    private static final long[] FST_BYTES = { 59154L, 64482L, 88630L, 21974L };
 
     /** jieba 分词 dict（zh 词级 lexicon 查表需要） */
     private static final String[] DICT_FILES = {
@@ -59,33 +70,16 @@ public final class DeviceTts {
             "dict/pos_dict/prob_start.utf8", "dict/pos_dict/prob_trans.utf8",
     };
     private static final long[] DICT_BYTES = {
-            519739L, 5998717L, 5071204L, 8974L, 829194L, 327139L, 1687686L, 4347L, 124159L,
+            519739L, 5998717L, 5071204L, 8974L, 49L, 327139L, 1687686L, 4347L, 124159L,
     };
 
     /**
-     * kokoro v1.1-zh voices.bin 音色顺序（官方 generate_voices_bin.py 口径，
-     * HF hexgrad/Kokoro-82M-v1.1-zh voices/ 清单核验，共 103 个）：
-     * 0-2 英文 / 3-57 女（55）/ 58-102 男（45）。
+     * 音色表（M11）：fanchen-wnj 是单说话人成年男声，只有 sid 0。
+     * 名字保留在设置里（voice 抽屉/试听链路不变），旧 Kokoro 名（zm_010 等）查不到 → 回落 0。
      */
-    static final String[] VOICE_NAMES = {
-            "af_maple", "af_sol", "bf_vale", "zf_001", "zf_002", "zf_003", "zf_004", "zf_005",
-            "zf_006", "zf_007", "zf_008", "zf_017", "zf_018", "zf_019", "zf_021", "zf_022",
-            "zf_023", "zf_024", "zf_026", "zf_027", "zf_028", "zf_032", "zf_036", "zf_038",
-            "zf_039", "zf_040", "zf_042", "zf_043", "zf_044", "zf_046", "zf_047", "zf_048",
-            "zf_049", "zf_051", "zf_059", "zf_060", "zf_067", "zf_070", "zf_071", "zf_072",
-            "zf_073", "zf_074", "zf_075", "zf_076", "zf_077", "zf_078", "zf_079", "zf_083",
-            "zf_086", "zf_087", "zf_088", "zf_091", "zf_092", "zf_093", "zf_096", "zf_097",
-            "zf_098", "zf_099",
-            "zm_009", "zm_010", "zm_011", "zm_012", "zm_013", "zm_014", "zm_015", "zm_016",
-            "zm_020", "zm_025", "zm_029", "zm_030", "zm_031", "zm_033", "zm_034", "zm_035",
-            "zm_037", "zm_041", "zm_045", "zm_050", "zm_052", "zm_053", "zm_054", "zm_055",
-            "zm_056", "zm_057", "zm_058", "zm_061", "zm_062", "zm_063", "zm_064", "zm_065",
-            "zm_066", "zm_068", "zm_069", "zm_080", "zm_081", "zm_082", "zm_089", "zm_091",
-            "zm_095", "zm_096", "zm_097", "zm_098", "zm_100",
-    };
+    static final String[] VOICE_NAMES = { "wnj_male" };
 
-    /** 默认男声：zm_010（官方 README 的示例男声，sid 59） */
-    public static final int DEFAULT_SID = 59;
+    public static final int DEFAULT_SID = 0;
 
     /** 音色名 → sid；不认识返回 -1 */
     public static int sidForName(String name) {
@@ -96,10 +90,10 @@ public final class DeviceTts {
         return -1;
     }
 
-    /** 中文音色清单（设置页抽屉用）：跳过 3 个英文，保持 sid 序 */
+    /** 中文音色清单（设置页抽屉用） */
     public static List<String> zhVoiceNames() {
         List<String> out = new ArrayList<>();
-        for (int i = 3; i < VOICE_NAMES.length; i++) out.add(VOICE_NAMES[i]);
+        for (String n : VOICE_NAMES) out.add(n);
         return out;
     }
 
@@ -107,8 +101,8 @@ public final class DeviceTts {
     static final String PREVIEW_TEXT = "夜深了，月亮悄悄爬上窗台。今晚的故事，现在开始。";
 
     /**
-     * 句尾静音垫（M9）：标点停顿 kokoro 自己会渲染，这里只留一点点气口。
-     * 0.45s 在真机上被用户反馈「句间隔太大」——合成慢于播放时垫静音会放大间隙，降到 0.15s。
+     * 句尾静音垫（M9）：0.45s 在真机上被用户反馈「句间隔太大」，降到 0.15s。
+     * VITS 自带句读停顿时长更规矩，这个垫子只留气口。
      */
     private static final float TAIL_SILENCE_SEC = 0.15f;
 
@@ -156,7 +150,7 @@ public final class DeviceTts {
     /** 语速（0.7–1.1，与系统 TTS 同口径）；下一句生效 */
     public void setRate(float r) { rate = r; }
 
-    /** 音色（kokoro sid）；下一句生效 */
+    /** 音色 sid；下一句生效（VITS 只有 0） */
     public void setVoice(int newSid) {
         if (newSid >= 0 && newSid < VOICE_NAMES.length) sid = newSid;
     }
@@ -171,19 +165,15 @@ public final class DeviceTts {
             extract(dir);
             long t0 = System.currentTimeMillis();
 
-            OfflineTtsKokoroModelConfig kokoro = new OfflineTtsKokoroModelConfig();
-            kokoro.setModel(new File(dir, ONNX).getAbsolutePath());
-            kokoro.setVoices(new File(dir, "voices.bin").getAbsolutePath());
-            kokoro.setTokens(new File(dir, "tokens.txt").getAbsolutePath());
-            kokoro.setLexicon(new File(dir, "lexicon-zh.txt").getAbsolutePath());
-            kokoro.setDataDir(new File(dir, "espeak-ng-data").getAbsolutePath());
-            kokoro.setDictDir(new File(dir, "dict").getAbsolutePath());
-            // lang 留空：lexicon-zh.txt 已显式传入，v1.13.8 的 KokoroMultiLangLexicon 不再需要 lang 兜底
+            OfflineTtsVitsModelConfig vits = new OfflineTtsVitsModelConfig();
+            vits.setModel(new File(dir, ONNX).getAbsolutePath());
+            vits.setLexicon(new File(dir, "lexicon.txt").getAbsolutePath());
+            vits.setTokens(new File(dir, "tokens.txt").getAbsolutePath());
+            vits.setDictDir(new File(dir, "dict").getAbsolutePath());
+            // 单说话人模型：dataDir 不用（留给 espeak 兜底的模型才需要），噪声/时长缩放走默认
 
             OfflineTtsModelConfig m = new OfflineTtsModelConfig();
-            m.setKokoro(kokoro);
-            // 线程数随 CPU 核数自适应（M10）：合成慢于播放 = 句间空档，
-            // 8 核机给 6 线程能明显压 RTF；低核机保底 2。留 1-2 核对 UI/网络。
+            m.setVits(vits);
             int threads = Math.min(6, Math.max(2, Runtime.getRuntime().availableProcessors() - 1));
             m.setNumThreads(threads);
             Diag.add("tts", "合成线程数=" + threads + " (cores=" + Runtime.getRuntime().availableProcessors() + ")");
@@ -191,8 +181,13 @@ public final class DeviceTts {
 
             OfflineTtsConfig c = new OfflineTtsConfig();
             c.setModel(m);
-            // 不传 ruleFsts：tarball 里那三个 *-zh.fst 是 VITS 流水线的（phone-zh 会把汉字
-            // 改写成拼音音素，与 kokoro 的「汉字→注音」lexicon 查表冲突）；官方 v1.1-zh 示例同样不用
+            // VITS 需要 rule FSTs（与 Kokoro 相反）：日期/数字/多音字/电话读法
+            StringBuilder fsts = new StringBuilder();
+            for (String f : FST_FILES) {
+                if (fsts.length() > 0) fsts.append(',');
+                fsts.append(new File(dir, f).getAbsolutePath());
+            }
+            c.setRuleFsts(fsts.toString());
 
             // 模型走 filesDir 绝对路径 → AssetManager 传 null（与 DeviceAsr 同口径，k2-fsa/sherpa-onnx#2562）
             tts = new OfflineTts((AssetManager) null, c);
@@ -202,12 +197,13 @@ public final class DeviceTts {
             player = new Thread(this::playerLoop, "reverie-tts-play");
             worker.start();
             player.start();
-            Log.i(TAG, "device-tts(kokoro) ready in " + (System.currentTimeMillis() - t0)
+            Log.i(TAG, "device-tts(vits) ready in " + (System.currentTimeMillis() - t0)
                     + "ms sampleRate=" + tts.sampleRate() + " speakers=" + tts.numSpeakers());
-            Diag.add("tts", "kokoro 就绪 耗时" + (System.currentTimeMillis() - t0)
+            Diag.add("tts", "vits 就绪 耗时" + (System.currentTimeMillis() - t0)
                     + "ms sr=" + tts.sampleRate() + " speakers=" + tts.numSpeakers());
         } catch (Throwable e) {   // UnsatisfiedLinkError 等也要兜住
             Log.w(TAG, "device-tts init failed", e);
+            Diag.add("tts", "vits 初始化失败: " + e);
             initFailed = true;
         }
     }
@@ -379,49 +375,13 @@ public final class DeviceTts {
             if (tmp.length() != ONNX_BYTES) throw new IllegalStateException("onnx " + tmp.length());
             if (!tmp.renameTo(onnx)) throw new IllegalStateException("rename onnx");
         }
-        copyIfWrong(new File(dir, "voices.bin"), "voices.bin", VOICES_BYTES);
-        copyIfWrong(new File(dir, "lexicon-zh.txt"), "lexicon-zh.txt", LEXICON_BYTES);
+        copyIfWrong(new File(dir, "lexicon.txt"), "lexicon.txt", LEXICON_BYTES);
         copyIfWrong(new File(dir, "tokens.txt"), "tokens.txt", TOKENS_BYTES);
+        for (int i = 0; i < FST_FILES.length; i++) {
+            copyIfWrong(new File(dir, FST_FILES[i]), FST_FILES[i], FST_BYTES[i]);
+        }
         for (int i = 0; i < DICT_FILES.length; i++) {
             copyIfWrong(new File(dir, DICT_FILES[i]), DICT_FILES[i], DICT_BYTES[i]);
-        }
-        extractEspeak(dir);
-    }
-
-    /**
-     * espeak-ng-data（生僻英文词兜底，zh 主路径走 lexicon-zh.txt）：
-     * 250+ 个小文件不做逐个字节清单——哨兵文件（核心音素表 + en/cmn 词典）校验，
-     * 不过则整树重拷。存在性检查保证幂等。
-     */
-    private void extractEspeak(File dir) throws Exception {
-        File espeak = new File(dir, "espeak-ng-data");
-        File phondata = new File(espeak, "phondata");
-        File enDict = new File(espeak, "en_dict");
-        if (phondata.isFile() && phondata.length() == 550424L
-                && enDict.isFile() && enDict.length() == 166944L) {
-            return;   // 已就位（存在性拷贝，缺失的个别文件不补——重装 app 自愈）
-        }
-        copyTree("tts_model/espeak-ng-data", espeak);
-    }
-
-    private void copyTree(String assetPath, File destDir) throws Exception {
-        if (!destDir.mkdirs() && !destDir.isDirectory()) throw new IllegalStateException("mkdir " + destDir);
-        String[] children = appCtx.getAssets().list(assetPath);
-        if (children == null) return;
-        for (String name : children) {
-            String asset = assetPath + "/" + name;
-            File target = new File(destDir, name);
-            String[] sub = appCtx.getAssets().list(asset);
-            if (sub != null && sub.length > 0) {
-                copyTree(asset, target);   // 目录
-            } else {
-                try (InputStream in = appCtx.getAssets().open(asset);
-                     OutputStream out = new FileOutputStream(target)) {
-                    byte[] buf = new byte[1 << 16];
-                    int n;
-                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                }
-            }
         }
     }
 
