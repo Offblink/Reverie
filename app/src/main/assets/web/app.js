@@ -1,4 +1,5 @@
-/* Reverie 应用层：四视图接线 + 选择态。引擎事件（M2 起）在 Host 钩子里接。 */
+/* Reverie 应用层：四视图接线 + 选择态。引擎事件（M2 起）在 Host 钩子里接。
+   M12 起为纯文字：麦克风、重听、音色抽屉、诊断面板随语音链路一并删除。 */
 (function () {
   "use strict";
 
@@ -74,13 +75,12 @@
   $('go-shelf').addEventListener('click', function () { renderShelf(); V.shelf.classList.add('on'); });
   $('go-settings').addEventListener('click', function () {
     loadSettings();
-    refreshDiag();
     V.settings.classList.add('on');
   });
   [].forEach.call(document.querySelectorAll('[data-back]'), function (b) {
     b.addEventListener('click', function () {
       var page = b.closest('.vpage');
-      if (page === V.story) { micAbort(); if (Zoom.depth() > 1) Zoom.back(); }
+      if (page === V.story) { if (Zoom.depth() > 1) Zoom.back(); }
       else page.classList.remove('on');
     });
   });
@@ -92,7 +92,7 @@
     if (V.story.classList.contains('on')) {
       var ok = Zoom.depth() > 1;
       console.log('reverie:back story-on depth=' + Zoom.depth() + ' consume=' + ok);
-      if (ok) { micAbort(); Zoom.back(); }
+      if (ok) Zoom.back();
       return ok;
     }
     console.log('reverie:back no-overlay-page');
@@ -118,7 +118,7 @@
       });
     }
     confirmEl.querySelector('.ct').textContent =
-      '删除《' + (s.title || '未命名') + '》？已听的和没写完的都会没掉。';
+      '删除《' + (s.title || '未命名') + '》？已看的和没写完的都会没掉。';
     confirmEl.querySelector('.cdel').onclick = function () {
       bridge('deleteStory', { id: s.id });
       confirmEl.classList.remove('on');
@@ -173,163 +173,21 @@
   }
 
   /* ---------- 设置 ---------- */
-  /** 分段胶囊控件：点按钮选中，data-v 为值 */
-  function bindSeg(id, onChange) {
-    var box = $(id);
-    box.addEventListener('click', function (e) {
-      var b = e.target.closest('button[data-v]');
-      if (!b) return;
-      setSeg(box, b.dataset.v);
-      if (onChange) onChange(b.dataset.v);
-    });
-  }
-  function setSeg(box, v) {
-    [].forEach.call(box.children, function (c) {
-      c.classList.toggle('sel', c.dataset.v === v);
-    });
-  }
-  function segVal(id) {
-    var s = $(id).querySelector('button.sel');
-    return s ? s.dataset.v : '';
-  }
-
-  var voiceNames = [];   // 当前音色清单（getVoices 快照），抽屉选中回写用
-
   function loadSettings() {
     var st = bridge('getSettings') || {};
     $('in-endpoint').value = st.endpoint || '';
     $('in-key').value = '';                 // key 永不回显
     $('in-chat').value = st.chatModel || '';
-    $('in-asr').value = st.asrModel || '';
-    setSeg($('in-asr-mode'), st.asrMode === 'cloud' ? 'cloud' : 'device');
-    setSeg($('in-tts-mode'), st.ttsMode || 'auto');
-    $('in-asr-endpoint').value = st.asrEndpoint || '';   // 云端 ASR 端点：空 = 跟随主端点
-    $('in-asr-key').value = '';                          // ASR 独立 key 同样不回显
-    voiceNames = bridge('getVoices') || [];
-    voiceCurrent = st.ttsVoice || '';
-    $('voice-val').textContent = st.ttsVoice
-      ? voiceLabel(st.ttsVoice)
-      : (voiceNames.length ? '默认' : '语音引擎未就绪');
-    $('in-rate').value = st.ttsRate != null ? Number(st.ttsRate).toFixed(1) : '0.9';
-    $('in-mic').value = st.micWindowSec != null ? st.micWindowSec : '10';
     $('set-hint').textContent = st.hasKey ? '已配置 key' : '尚未配置 key';
   }
-
-  /** 音色显示名：端上 VITS 是单男声，kokoro 前缀（旧设置残留）标性别 */
-  function voiceLabel(n) {
-    if (n === 'wnj_male') return '男声（wnj，内置）';
-    if (/^zm_/.test(n)) return '男声 ' + n;
-    if (/^zf_/.test(n)) return '女声 ' + n;
-    return n;
-  }
-
-  /* 音色抽屉：男声在前（M9 用户偏好），点行选中，试听胶囊单念一句不改默认 */
-  function openVoicePicker() {
-    var mask = $('voice-mask'), list = $('voice-list');
-    list.innerHTML = '';
-    if (!voiceNames.length) {
-      var none = document.createElement('div');
-      none.className = 'tiny';
-      none.style.padding = '10px 4px';
-      none.textContent = '语音引擎未就绪（可到「语音引擎」切到端上模型）';
-      list.appendChild(none);
-    }
-    var curVal = voiceCurrent;
-    var items = [{ v: '', n: '默认' }];
-    voiceNames.filter(function (x) { return /^zm_/.test(x); })
-      .forEach(function (x) { items.push({ v: x, n: voiceLabel(x) }); });
-    voiceNames.filter(function (x) { return /^zf_/.test(x); })
-      .forEach(function (x) { items.push({ v: x, n: voiceLabel(x) }); });
-    voiceNames.filter(function (x) { return !/^z[fm]_/.test(x); })
-      .forEach(function (x) { items.push({ v: x, n: voiceLabel(x) }); });
-
-    items.forEach(function (o) {
-      var row = document.createElement('div');
-      row.className = 'pick-item' + (o.v === curVal ? ' sel' : '');
-      var pick = document.createElement('button');
-      pick.className = 'pick-main';
-      pick.innerHTML = '<span>' + esc(o.n) + '</span>' + (o.v === curVal ? '<span class="tick">✓</span>' : '');
-      pick.addEventListener('click', function () {
-        voiceCurrent = o.v;
-        $('voice-val').textContent = o.n;
-        mask.classList.remove('on');
-      });
-      row.appendChild(pick);
-      if (o.v) {   // 具体音色才可试听
-        var tryBtn = document.createElement('button');
-        tryBtn.className = 'pick-try';
-        tryBtn.textContent = '试听';
-        tryBtn.addEventListener('click', function (e) {
-          e.stopPropagation();
-          var r = bridge('previewTts', { name: o.v });
-          toast(r && r.ok ? '试听：' + o.n : '试听失败（引擎未就绪或正在生成）');
-        });
-        row.appendChild(tryBtn);
-      }
-      list.appendChild(row);
-    });
-    mask.classList.add('on');
-  }
-  var voiceCurrent = '';   // 抽屉选中的音色（保存时进 patch）
-
-  $('voice-row').addEventListener('click', openVoicePicker);
-  $('voice-close').addEventListener('click', function () { $('voice-mask').classList.remove('on'); });
-  $('voice-mask').addEventListener('click', function (e) {
-    if (e.target === $('voice-mask')) $('voice-mask').classList.remove('on');
-  });
-
-  /* ---------- 诊断（M10）：电平条 + 引擎日志 + 麦克风自检 ---------- */
-  var diagTimer = 0;
-  function refreshDiag() {
-    var arr = bridge('getDiag', { n: 80 }) || [];
-    $('diag-log').textContent = arr.length ? arr.join('\n') : '（暂无日志）';
-  }
-  function setMicLevel(rms, thr) {
-    $('mic-level').style.width = Math.min(100, Math.round(rms / 6000 * 100)) + '%';
-    $('mic-level-txt').textContent = 'rms ' + rms + ' / 门限 ' + thr;
-  }
-  $('mic-test-btn').addEventListener('click', function () {
-    var r = bridge('micTest', { sec: 6 });
-    toast(r && r.ok ? '自检中，请对着手机说话…' : '现在不能自检（正在录音或生成中）');
-  });
-  $('diag-refresh-btn').addEventListener('click', refreshDiag);
-  $('diag-copy-btn').addEventListener('click', function () {
-    var txt = $('diag-log').textContent || '';
-    var r = bridge('copyText', { text: txt });
-    toast(r && r.ok ? '日志已复制到剪贴板（' + txt.length + ' 字）' : '复制失败');
-  });
-  $('diag-auto-btn').addEventListener('click', function () {
-    if (diagTimer) {
-      clearInterval(diagTimer); diagTimer = 0; this.classList.remove('on');
-    } else {
-      diagTimer = setInterval(refreshDiag, 2000); this.classList.add('on'); refreshDiag();
-    }
-  });
-
-  bindSeg('in-asr-mode');
-  bindSeg('in-tts-mode', function (v) {
-    $('tts-mode-hint').textContent = v === 'auto'
-      ? '自动＝优先系统 TTS，没有中文引擎时用内置端上模型'
-      : v === 'system' ? '只用系统 TTS；系统没有中文引擎时会退回纯文字'
-      : '只用内置端上模型（离线，首次开故事时初始化约需数十秒）';
-  });
 
   $('save-btn').addEventListener('click', function () {
     var patch = {
       endpoint: $('in-endpoint').value.trim(),
-      chatModel: $('in-chat').value.trim(),
-      asrModel: $('in-asr').value.trim(),
-      asrMode: segVal('in-asr-mode') || 'device',
-      ttsMode: segVal('in-tts-mode') || 'auto',
-      asrEndpoint: $('in-asr-endpoint').value.trim(),   // 空 = 清掉=跟随主端点
-      ttsVoice: voiceCurrent,
-      ttsRate: parseFloat($('in-rate').value) || 0.9,
-      micWindowSec: parseInt($('in-mic').value, 10) || 10
+      chatModel: $('in-chat').value.trim()
     };
     var k = $('in-key').value.trim();
     if (k) patch.apiKey = k;               // 空 = 不改
-    var ak = $('in-asr-key').value.trim();
-    if (ak) patch.asrApiKey = ak;          // 空 = 不改（留空跟随主 KEY）
     var r = bridge('setSettings', patch);
     toast(r && r.ok ? '已保存' : '保存失败');
     loadSettings();
@@ -337,43 +195,37 @@
 
   $('test-btn').addEventListener('click', function () {
     var r = bridge('testEndpoint');
-    if (!r) { toast('引擎未就绪（M2 接入）'); return; }
+    if (!r) { toast('引擎未就绪'); return; }
     toast(r.ok ? '连通 ' + r.latencyMs + ' ms' : (r.msg || '不通'));
   });
 
   /* ---------- 故事页渲染 ---------- */
   var storyFlow = $('story-flow'), storyDock = $('story-dock');
   var curIdx = -1;              // 正在流式渲染的段
-  var pendingDock = null;       // segment-done 已到、等 tts idle 才弹 {index, options, isFinal}
   var followMode = true;        // 跟读滚动：用户上滑离开底部即关，回底部再开
-  var degradedToastShown = false;
+  var curStoryId = null;
 
   function tierName(t) { return t === 'medium' ? '中' : t === 'long' ? '长' : '短'; }
 
-  /* ---------- 生成中/朗读准备指示（M11） ----------
-     覆盖三段静默：① newStory 后首句抵达前 ② choose 后同一窗口 ③ 文本已完、TTS 仍在合成。
-     信号：busy 快照（①②）、segment-delta（首句到即撤）、segment-done + tts-state（③）。
-     骨架贴正文末尾，不遮正文；关动效由 glass.css 全局降级 + 本文件的静态形态兜底。 */
+  /* ---------- 生成中的等待反馈（M11） ----------
+     LLM 到首句前有一段纯等待，页面不再静默：正文流末尾浮一块呼吸骨架，
+     首个 segment-delta 即撤；busy 快照兜底（换故事/页面重载也能亮起）。
+     骨架贴正文末尾，不遮正文；关动效由 glass.css 全局降级 + 静态形态兜底。 */
   var LOADING_ID = 'story-loading';
-  var loadPhase = null;      // null | 'text'（等文本）| 'voice'（文本到齐、等开读）
-  var speakingIdx = -1;      // 最近一次 tts speaking 的段号
-  var voiceWaitIdx = -1;     // 文本已完、尚未开读的段号
-  var curStoryId = null;
+  var loading = false;
 
   function renderLoading() {
-    if (!loadPhase) return;
+    if (!loading) return;
     var el = document.createElement('p');
     el.className = 'seg loading-seg';
     el.id = LOADING_ID;
-    el.innerHTML = loadPhase === 'text'
-      ? '<div class="bar"></div><div class="bar"></div><div class="bar"></div>' +
-        '<div class="whisper"><span class="dot"></span>正在编织…</div>'
-      : '<div class="whisper"><span class="dot"></span>正在准备朗读…</div>';
+    el.innerHTML = '<div class="bar"></div><div class="bar"></div><div class="bar"></div>' +
+      '<div class="whisper"><span class="dot"></span>正在编织…</div>';
     storyFlow.appendChild(el);
   }
 
-  function showLoading(phase) {
-    loadPhase = phase;
+  function showLoading() {
+    loading = true;
     var old = $(LOADING_ID);
     if (old) old.remove();
     renderLoading();
@@ -381,39 +233,9 @@
   }
 
   function hideLoading() {
-    loadPhase = null;
+    loading = false;
     var old = $(LOADING_ID);
     if (old) old.remove();
-  }
-
-  /** 换故事/开新档：相位与说话段号全部作废 */
-  function resetLoading() {
-    speakingIdx = -1;
-    voiceWaitIdx = -1;
-    hideLoading();
-  }
-
-  /** 与 Java splitSentences 同规则切句（高亮按句文本匹配，两边必须一致） */
-  function splitSents(t) {
-    var out = [], cur = '';
-    if (!t) return out;
-    for (var i = 0; i < t.length; i++) {
-      cur += t[i];
-      if ('。！？!?…'.indexOf(t[i]) >= 0) { var s = cur.trim(); if (s) out.push(s); cur = ''; }
-    }
-    var tail = cur.trim();
-    if (tail) out.push(tail);
-    return out;
-  }
-
-  function fillSpans(p, text) {
-    p.innerHTML = '';
-    splitSents(text).forEach(function (s) {
-      var sp = document.createElement('span');
-      sp.className = 'sent';
-      sp.textContent = s;
-      p.appendChild(sp);
-    });
   }
 
   /** 用户上滑离开底部 → 停止跟读；回底部恢复 */
@@ -436,10 +258,10 @@
       var p = document.createElement('p');
       p.className = 'seg';
       p.dataset.idx = seg.index;
-      fillSpans(p, seg.text);
+      p.textContent = seg.text;
       storyFlow.appendChild(p);
     });
-    renderLoading();          // 全量重建会清掉骨架 → 按当前相位补回
+    renderLoading();          // 全量重建会清掉骨架 → 按相位补回
     storyFlow.scrollTop = storyFlow.scrollHeight;
     // 空故事（首段生成失败留下的档）→ 给重试入口，别开成死页
     if (!st.segments.length) {
@@ -447,13 +269,9 @@
       else storyDock.classList.remove('on');   // 正在生成首段：不弹任何坞
       return;
     }
-    // 未回答的选择点 → 弹选项坞（续听落点）。
-    // 例外：pendingDock 命中最后一段 = 正在朗读中 → 显式清空 dock，读完才弹（SPEC §6）。
+    // 未回答的选择点 → 弹选项坞（续听落点）
     var last = st.segments[st.segments.length - 1];
-    var waitingRead = pendingDock && last && pendingDock.index === last.index;
-    if (waitingRead) {
-      storyDock.classList.remove('on');
-    } else if (last && !busy && !last.isFinal && last.choice === -1 && last.options.length) {
+    if (last && !busy && !last.isFinal && last.choice === -1 && last.options.length) {
       showDock(last.options);
     } else {
       storyDock.classList.remove('on');
@@ -475,7 +293,6 @@
     });
     storyDock.classList.add('on');
     storyFlow.scrollTop = storyFlow.scrollHeight;
-    bridge('startAsr');   // 选项就位 → 自动开麦（SPEC §7；原生守卫前台/busy/已答）
   }
 
   function showRetry(msg) {
@@ -500,47 +317,22 @@
   /* ---------- 引擎事件 ---------- */
   Host.onState = function (st) {
     if (st && st.story) {
-      if (st.story.id !== curStoryId) {   // 换故事/开新档：旧相位全部作废
+      if (st.story.id !== curStoryId) {   // 换故事/开新档：骨架与流式段号作废
         curStoryId = st.story.id;
-        resetLoading();
+        curIdx = -1;
+        hideLoading();
       }
       renderStory(st.story, st.busy);
-      // busy 快照 = ①② 的权威信号（请求已发、首句未到）；正在流式（curIdx 有效）时不重复点亮
-      if (st.busy && loadPhase === null && curIdx < 0) showLoading('text');
-    }
-    if (st && st.ttsDegraded && !degradedToastShown) {
-      degradedToastShown = true;
-      toast('这台设备没有中文语音引擎，已切换为纯文字模式');
+      // busy 快照 = 等首句的权威信号（请求已发、首句未到）；正在流式（curIdx 有效）时不重复点亮
+      if (st.busy && !loading && curIdx < 0) showLoading();
     }
   };
-
-  /** 高亮当前朗读句（按句文本定位——两边切句规则一致） */
-  function highlightSentence(segIdx, text) {
-    var p = storyFlow.querySelector('.seg[data-idx="' + segIdx + '"]');
-    if (!p) return;
-    var prev = p.querySelector('.sent.cur');
-    if (prev) prev.classList.remove('cur');
-    var spans = p.querySelectorAll('.sent');
-    for (var i = 0; i < spans.length; i++) {
-      if (spans[i].textContent === String(text).trim()) {
-        spans[i].classList.add('cur');
-        if (followMode) spans[i].scrollIntoView({ block: 'center', behavior: 'smooth' });
-        return;
-      }
-    }
-  }
-
-  function clearHighlight() {
-    var prev = storyFlow.querySelector('.sent.cur');
-    if (prev) prev.classList.remove('cur');
-  }
 
   Host.onEvent = function (ev) {
     if (!ev) return;
     switch (ev.type) {
       case 'segment-delta': {
-        hideLoading();            // 首句已到：①② 的等待指示立刻撤
-        voiceWaitIdx = -1;
+        hideLoading();            // 首句已到
         if (ev.index !== curIdx) {          // 新段第一句 → 开块
           curIdx = ev.index;
           var p = document.createElement('p');
@@ -550,10 +342,7 @@
         }
         var el = storyFlow.querySelector('.seg[data-idx="' + ev.index + '"]');
         if (el) {
-          var sp = document.createElement('span');
-          sp.className = 'sent';
-          sp.textContent = ev.text;
-          el.appendChild(sp);
+          el.appendChild(document.createTextNode(ev.text));
           if (followMode) storyFlow.scrollTop = storyFlow.scrollHeight;
         }
         $('story-p2').textContent = '正在编织第 ' + (ev.index + 1) + ' 段…';
@@ -562,156 +351,31 @@
       case 'segment-done': {
         curIdx = -1;
         var el2 = storyFlow.querySelector('.seg[data-idx="' + ev.index + '"]');
-        if (el2) fillSpans(el2, ev.text);   // 全文重建（切句与 TTS 对齐）
-        // 文本到齐≠可以选：等 TTS 念完该段（tts idle）才弹（SPEC §6）
-        pendingDock = { index: ev.index, options: ev.options, isFinal: ev.isFinal };
-        // ③ 文本已完但还没开读（合成慢于 LLM）→ 点亮朗读准备；已在读则不打扰
-        if (speakingIdx !== ev.index) { voiceWaitIdx = ev.index; showLoading('voice'); }
-        else voiceWaitIdx = -1;
-        break;
-      }
-      case 'tts-state': {
-        if (ev.state === 'speaking') {
-          speakingIdx = ev.index;
-          if (loadPhase === 'voice' && voiceWaitIdx === ev.index) hideLoading();   // 开读了，撤 ③
-          highlightSentence(ev.index, ev.text);
-        } else if (ev.state === 'idle') {
-          clearHighlight();
-          if (voiceWaitIdx === ev.index) { voiceWaitIdx = -1; hideLoading(); }
-          if (pendingDock && pendingDock.index === ev.index) {
-            var pd = pendingDock;
-            pendingDock = null;
-            if (pd.isFinal) {
-              storyDock.classList.remove('on');
-              $('story-p2').textContent = '梦已完结';
-              toast('故事讲完了，晚安');
-            } else {
-              showDock(pd.options);
-            }
-          }
-        } else if (ev.state === 'replay-done') {
-          clearHighlight();
-          replaying = false;
-          toast('重听结束');
-        } else if (ev.state === 'degraded') {
-          if (loadPhase === 'voice') hideLoading();   // 纯文字档：没有开读可言
-          if (!degradedToastShown) {
-            degradedToastShown = true;
-            toast('这台设备没有中文语音引擎，已切换为纯文字模式');
-          }
-          // 降级后段读完事件仍会来（引擎按读完结算），pendingDock 照常消费
+        if (el2) el2.textContent = ev.text;   // 全文重建，与引擎落盘的正文一致
+        $('story-p2').textContent = ev.isFinal
+          ? '梦已完结'
+          : '第 ' + (ev.index + 1) + '/' + ev.total + ' 段 · 等你选';
+        if (ev.isFinal) {
+          storyDock.classList.remove('on');
+          toast('故事讲完了，晚安');
+        } else {
+          showDock(ev.options);   // 纯文字：文本到齐即可选
         }
-        break;
-      }
-      case 'asr-level': {
-        setMicLevel(ev.rms || 0, ev.thr || 0);
-        break;
-      }
-      case 'mic-test': {
-        toast(ev.ok ? '自检通过：峰值音量 ' + ev.peak + '（麦克风有信号）'
-                    : (ev.msg || '自检失败'));
-        refreshDiag();
         break;
       }
       case 'choice-made': {
-        pendingDock = null;
-        asrRingStop();
         $('story-p2').textContent = '继续…';
-        break;
-      }
-      case 'asr-state': {
-        if (ev.state === 'listening') {
-          asrRingStart(ev.windowSec || 10);
-        } else {
-          asrRingStop();
-          if (ev.state === 'timeout') {
-            // M9：带窗口峰值音量，自我诊断「没出声」vs「说了没过阈」
-            if (ev.heard) {
-              toast('听到「' + ev.heard + '」但没对上选项 —— 点一下吧');
-            } else if (ev.peakRms != null && ev.peakRms < 800) {
-              toast('没检测到你的声音 —— 靠近手机、说大声一点再按麦克风');
-            } else if (ev.peakRms != null) {
-              toast('听到了动静但没当成人声（环境噪音可能偏大）—— 再按麦克风说一次');
-            } else {
-              toast('没听到选择，选项还在等着');
-            }
-          } else if (ev.state === 'error') {
-            toast(ev.msg || '语音识别失败，可点击选择');
-          }
-          // matched：choice-made 紧随其后，UI 交给它
-        }
         break;
       }
       case 'story-done': break;
       case 'error': {
         hideLoading();            // 失败/重试坞接管，避免骨架与重试按钮同屏
-        voiceWaitIdx = -1;
-        if (ev.stage === 'llm') { pendingDock = null; showRetry(ev.msg); }
+        if (ev.stage === 'llm') showRetry(ev.msg);
         else toast(ev.msg);
         break;
       }
     }
   };
-
-  /* ---------- 重听（M4，SPEC §3.2） ---------- */
-  var replaying = false;
-  $('replay-btn').addEventListener('click', function () {
-    if (replaying) {
-      replaying = false;
-      bridge('stopReplay');
-      clearHighlight();
-      toast('停止重听');
-      return;
-    }
-    var st = bridge('getState');
-    var story = st && st.story;
-    if (!story || !story.segments || !story.segments.length) { toast('还没有内容可重听'); return; }
-    // 活跃故事 → 重播当前段；已完结 → 从头重听全文
-    var r = story.status === 'done'
-      ? bridge('replay', {})
-      : bridge('replaySegment', { index: story.segments.length - 1 });
-    if (!r || !r.ok) { toast(st.busy ? '正在生成，稍后再试' : '暂不可重听'); return; }
-    replaying = true;
-  });
-
-  /* ---------- 麦克风（M5，SPEC §7） ---------- */
-  var micBtn = $('mic-btn');
-  var asr = { live: false, timer: 0, endsAt: 0, dur: 0 };
-
-  function ringSet(pct) { micBtn.style.setProperty('--p', Math.max(0, Math.min(100, pct))); }
-
-  function asrRingStart(sec) {
-    asr.live = true;
-    asr.dur = sec;
-    asr.endsAt = Date.now() + sec * 1000;
-    micBtn.classList.add('live');
-    clearInterval(asr.timer);
-    asr.timer = setInterval(function () {
-      ringSet((asr.endsAt - Date.now()) / (asr.dur * 1000) * 100);
-      if (Date.now() >= asr.endsAt) asrRingStop();   // 原生 VAD 是真值，这里只是视觉对齐
-    }, 200);
-  }
-
-  function asrRingStop() {
-    asr.live = false;
-    clearInterval(asr.timer);
-    micBtn.classList.remove('live');
-    ringSet(0);
-  }
-
-  /** 离开故事页：关麦（原生也会在退后台/换故事时兜底关） */
-  function micAbort() {
-    if (asr.live) { bridge('stopAsr'); asrRingStop(); }
-  }
-
-  micBtn.addEventListener('click', function () {
-    if (asr.live) { micAbort(); return; }
-    var r = bridge('startAsr');
-    if (!r) { toast('语音选择暂不可用'); return; }
-    if (r.needPermission) return;   // 系统授权弹窗中；授权后 listening 事件亮环
-    if (!r.ok) { toast('现在还不能录音'); return; }
-    // ok=true 但 listening 事件稍后到，环由事件点亮
-  });
 
   /* ---------- 桥自检 ---------- */
   syncStart();

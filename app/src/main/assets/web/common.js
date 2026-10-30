@@ -5,8 +5,8 @@
  *     **只对方法加 @JavascriptInterface，JS 才看得见**。
  *     方法缺失时 bridge() 回 null —— 页面按空态降级，绝不抛顶层。
  *   原生 → JS：
- *     Host.onEvent(ev)  引擎事件（M2 起：segment-delta/segment-done/tts-state/
- *                       choice-made/asr-state/story-done/error）
+ *     Host.onEvent(ev)  引擎事件（M2 起：segment-delta/segment-done/
+ *                       choice-made/error）
  *     Host.onState(st)  全量快照 {settings(不含key), story, busy}——结构性
  *                       变化后原生推，页面也可 bridge("getState") 主动拉。
  *     Host.back()       返回键：true = 页面自己消费（zoom 缩回），false = 原生继续。

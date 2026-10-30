@@ -1,14 +1,10 @@
 package org.offblink.reverie;
 
-import android.Manifest;
-import android.app.Activity;
-import android.content.pm.PackageManager;
 import android.webkit.JavascriptInterface;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.offblink.reverie.engine.Diag;
 import org.offblink.reverie.engine.LlmClient;
 import org.offblink.reverie.engine.StoryEngine;
 
@@ -17,9 +13,9 @@ import org.offblink.reverie.engine.StoryEngine;
  * 契约见 SPEC §3.2 与 assets/web/common.js 头注释——改一边必须同步另一边。
  * **只对方法加 @JavascriptInterface，JS 才看得见**。
  *
- * M2 范围：getState / getSettings / setSettings + 故事方法
- * （newStory / choose / listStories / openStory / deleteStory / retry）。
- * M5 起：startAsr / stopAsr（含 RECORD_AUDIO 运行时申请）。
+ * 范围：getState / getSettings / setSettings + 故事方法
+ * （newStory / choose / listStories / openStory / deleteStory / retry）+ testEndpoint。
+ * 语音（ASR/TTS）与诊断（getDiag/copyText/micTest）相关方法在 M12 已删除。
  */
 public class ReverieBridge {
 
@@ -28,17 +24,12 @@ public class ReverieBridge {
         void onState(String stJson);
     }
 
-    static final int REQ_MIC = 7701;   // RECORD_AUDIO 请求码
-
     private final Settings settings;
     private final Host host;
-    private final Activity act;        // 运行时权限申请需要 Activity
-    private StoryEngine engine;        // M2 起注入
-    private boolean pendingAsr;        // 授权弹窗期间挂起的开麦请求
+    private StoryEngine engine;   // M2 起注入
 
-    public ReverieBridge(Settings settings, Activity act, Host host) {
+    public ReverieBridge(Settings settings, Host host) {
         this.settings = settings;
-        this.act = act;
         this.host = host;
     }
 
@@ -66,7 +57,6 @@ public class ReverieBridge {
                     o.put("story", JSONObject.NULL);
                     o.put("busy", false);
                 }
-                o.put("ttsDegraded", engine != null && engine.ttsDegraded());
             }
             return o.toString();
         } catch (JSONException e) {
@@ -87,83 +77,8 @@ public class ReverieBridge {
     public String setSettings(String patchJson) {
         try {
             settings.apply(new JSONObject(patchJson));
-            if (engine != null) engine.applyTtsSettings();   // 语速/音色即时生效（M6）
             return ok();
         } catch (JSONException e) {
-            return err(e);
-        }
-    }
-
-    /** TTS 音色清单（M6，SPEC §3.2）：TTS 未就绪时空表，设置页据此提示 */
-    @JavascriptInterface
-    public String getVoices() {
-        try {
-            JSONArray arr = new JSONArray();
-            if (engine != null) {
-                for (String v : engine.voices()) arr.put(v);
-            }
-            return arr.toString();
-        } catch (Exception e) {
-            return err(e);
-        }
-    }
-
-    /** 诊断日志（M10）：{n?} → 最近 n 条字符串数组；设置页诊断面板用 */
-    @JavascriptInterface
-    public String getDiag(String argsJson) {
-        try {
-            int n = (argsJson == null || argsJson.isEmpty()) ? 60
-                    : new JSONObject(argsJson).optInt("n", 60);
-            return Diag.dump(n);
-        } catch (Exception e) {
-            return "[]";
-        }
-    }
-
-    /**
-     * 复制文本到系统剪贴板（M10）：{text} → {ok}。
-     * WebView 跑在 file:// 下 navigator.clipboard 不可靠，走原生 ClipboardManager。
-     */
-    @JavascriptInterface
-    public String copyText(String argsJson) {
-        try {
-            String text = new JSONObject(argsJson).optString("text", "");
-            if (act == null || text.isEmpty()) return "{\"ok\":false}";
-            android.content.ClipboardManager cm = (android.content.ClipboardManager)
-                    act.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
-            if (cm == null) return "{\"ok\":false}";
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("reverie-diag", text));
-            JSONObject o = new JSONObject();
-            o.put("ok", true);
-            return o.toString();
-        } catch (Exception e) {
-            return err(e);
-        }
-    }
-
-    /** 麦克风自检（M10）：{sec?} → {ok}；结果经 mic-test / asr-level 事件回 JS */
-    @JavascriptInterface
-    public String micTest(String argsJson) {
-        try {
-            int sec = (argsJson == null || argsJson.isEmpty()) ? 6
-                    : new JSONObject(argsJson).optInt("sec", 6);
-            JSONObject o = new JSONObject();
-            o.put("ok", engine != null && engine.micTest(sec));
-            return o.toString();
-        } catch (Exception e) {
-            return err(e);
-        }
-    }
-
-    /** 试听音色（M9）：{name} → {ok}；生成中拒绝，会打断当前朗读 */
-    @JavascriptInterface
-    public String previewTts(String argsJson) {
-        try {
-            String name = new JSONObject(argsJson).optString("name", "");
-            JSONObject o = new JSONObject();
-            o.put("ok", engine != null && engine.previewVoice(name));
-            return o.toString();
-        } catch (Exception e) {
             return err(e);
         }
     }
@@ -240,42 +155,6 @@ public class ReverieBridge {
         }
     }
 
-    /* ---------- 重听（M4，SPEC §3.2） ---------- */
-
-    /** 重听全文：不带参 = 从头；带 fromSegment = 从指定段 */
-    @JavascriptInterface
-    public String replay(String argsJson) {
-        try {
-            Integer from = null;
-            if (argsJson != null && !argsJson.isEmpty()) {
-                JSONObject a = new JSONObject(argsJson);
-                if (a.has("fromSegment") && !a.isNull("fromSegment")) from = a.getInt("fromSegment");
-            }
-            JSONObject o = new JSONObject();
-            o.put("ok", engine.replay(from));
-            return o.toString();
-        } catch (Exception e) {
-            return err(e);
-        }
-    }
-
-    @JavascriptInterface
-    public String replaySegment(String argsJson) {
-        try {
-            JSONObject o = new JSONObject();
-            o.put("ok", engine.replaySegment(new JSONObject(argsJson).getInt("index")));
-            return o.toString();
-        } catch (Exception e) {
-            return err(e);
-        }
-    }
-
-    @JavascriptInterface
-    public String stopReplay() {
-        engine.stopReplay();
-        return ok();
-    }
-
     @JavascriptInterface
     public String testEndpoint() {
         try {
@@ -294,55 +173,6 @@ public class ReverieBridge {
             } catch (JSONException je) {
                 return err(je);
             }
-        }
-    }
-
-    /* ---------- 语音选择（M5，SPEC §7） ---------- */
-
-    /** 开麦：没权限先弹系统授权，结果经 onRequestPermissionsResult 续上 */
-    @JavascriptInterface
-    public String startAsr() {
-        try {
-            if (act.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                    != PackageManager.PERMISSION_GRANTED) {
-                pendingAsr = true;
-                act.requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
-                JSONObject o = new JSONObject();
-                o.put("ok", false);
-                o.put("needPermission", true);
-                return o.toString();
-            }
-            JSONObject o = new JSONObject();
-            o.put("ok", engine != null && engine.startAsr());
-            return o.toString();
-        } catch (Exception e) {
-            return err(e);
-        }
-    }
-
-    /** 手动关麦（丢弃当前录音） */
-    @JavascriptInterface
-    public String stopAsr() {
-        if (engine != null) engine.stopAsr();
-        return ok();
-    }
-
-    /** MainActivity.onRequestPermissionsResult 转进来：授权成功则续上挂起的开麦 */
-    void onMicPermission(boolean granted) {
-        if (granted) {
-            if (pendingAsr) {
-                pendingAsr = false;
-                if (engine != null) engine.startAsr();
-            }
-        } else {
-            pendingAsr = false;
-            try {
-                JSONObject ev = new JSONObject();
-                ev.put("type", "asr-state");
-                ev.put("state", "error");
-                ev.put("msg", "麦克风权限被拒绝，语音选择不可用（仍可点击选择）");
-                emitEvent(ev);
-            } catch (JSONException ignored) { }
         }
     }
 

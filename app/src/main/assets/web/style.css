@@ -127,11 +127,8 @@ button { font-family: inherit; color: inherit; background: none; border: 0; curs
           mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
 }
 .seg { font-size: 17px; line-height: 1.95; letter-spacing: .04em; margin: 0 0 22px; color: var(--ink); }
-.seg .cur { color: #FFFFFF; border-radius: 4px; background: rgba(139,140,240,.18); }
-.seg .sent { transition: background .15s var(--damped), color .15s var(--damped); }
 
-/* 生成/朗读准备指示（M11）：贴在正文末尾，不遮正文。
-   三段静默各有相位：text=等下一段文本（骨架），voice=文本已完在等开读（点+文案）。 */
+/* 生成等待指示（M11）：贴在正文末尾，不遮正文（M12 起只剩等文本这一个相位）。 */
 .loading-seg { pointer-events: none; }
 .loading-seg .bar {
   height: 13px; border-radius: 7px; margin: 13px 0;
@@ -198,98 +195,10 @@ button { font-family: inherit; color: inherit; background: none; border: 0; curs
 }
 .set-test:active { transform: scale(.96); }
 
-/* 诊断面板（M10）：实时电平条 + 滚动日志 */
-.mic-meter {
-  margin-top: 8px; height: 8px; border-radius: 999px;
-  background: rgba(255,255,255,.06); overflow: hidden;
-}
-.mic-meter-fill {
-  height: 100%; width: 0%; border-radius: 999px;
-  background: linear-gradient(90deg, var(--accent), #A5A6F5);
-  transition: width .12s linear;
-}
-.diag-btns { display: flex; gap: 8px; }
-.diag-btn {
-  flex: 1; height: 38px; border-radius: 12px;
-  border: .5px solid var(--glass-border); font-size: 12px; color: var(--ink2);
-  transition: background var(--damped), color var(--damped);
-}
-.diag-btn:active { background: rgba(255,255,255,.06); color: var(--ink); }
-.diag-btn.on { color: var(--accent); border-color: var(--accent); }
-.diag-log {
-  margin: 8px 0 0; max-height: 240px; overflow: auto;
-  font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace;
-  white-space: pre-wrap; color: var(--ink3);
-}
-
 /* ============================================================
-   麦克风倒计时环（M5）
-   conic 渐变环带：--p（0–100）由 app.js 每 200ms 刷新；静默时整环隐藏。
-   ============================================================ */
-#mic-btn { position: relative; }
-#mic-btn::before {
-  content: ''; position: absolute; inset: -3px; border-radius: 50%;
-  background: conic-gradient(var(--accent) calc(var(--p, 0) * 1%), rgba(255,255,255,.10) 0);
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
-          mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
-  opacity: 0; transition: opacity .15s var(--damped);
-}
-#mic-btn.live::before { opacity: 1; }
-#mic-btn.live { color: var(--accent); }
-
-/* ============================================================
-   书架删除确认 + 设置音色下拉 + 长按提示（M6）
+   书架删除确认 + 长按提示（M6）
    ============================================================ */
 .shelf-hint { margin: 10px 2px 0; text-align: right; }
-
-/* 分段胶囊选择器（M8，替代原生 select/radio）：与首页 tier-pill 同语言 */
-.seg-ctl {
-  display: flex; gap: 6px; margin-top: 9px; padding: 3px;
-  background: rgba(255,255,255,.04); border-radius: 14px;
-  border: .5px solid var(--line);
-}
-.seg-ctl button {
-  flex: 1; padding: 8px 0; border-radius: 11px; font-size: 13px;
-  letter-spacing: .06em; color: var(--ink3);
-  transition: background var(--damped), color var(--damped);
-}
-.seg-ctl button.sel {
-  color: var(--ink); font-weight: 700;
-  background: var(--accent-dim); border: .5px solid var(--accent);
-}
-.seg-hint { margin-top: 7px; }
-
-/* 抽屉选择行（音色）：整行可点，右侧箭头示意可展开 */
-.set-pick { width: 100%; text-align: left; }
-.pick-val {
-  display: flex; justify-content: space-between; align-items: center;
-  margin-top: 5px; font-size: 14px; color: var(--ink);
-}
-.pick-arrow { color: var(--ink3); font-size: 17px; }
-.pick-list {
-  max-height: 46vh; overflow-y: auto; margin-bottom: 14px;
-  -webkit-overflow-scrolling: touch;
-}
-.pick-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 8px 6px 14px; border-radius: 13px;
-  transition: background var(--damped);
-}
-.pick-item:active { background: rgba(255,255,255,.05); }
-.pick-item.sel { background: var(--accent-dim); }
-.pick-main {
-  flex: 1; padding: 8px 0; text-align: left;
-  font-size: 14px; color: var(--ink2);
-  display: flex; justify-content: space-between; align-items: center;
-}
-.pick-item.sel .pick-main { color: var(--accent); font-weight: 700; }
-.pick-main .tick { font-weight: 700; }
-.pick-try {
-  flex: none; padding: 6px 14px; border-radius: 999px;
-  border: .5px solid var(--glass-border); font-size: 12px; color: var(--ink2);
-  transition: background var(--damped);
-}
-.pick-try:active { background: rgba(255,255,255,.06); color: var(--ink); }
 
 .confirm-mask {
   position: fixed; inset: 0; z-index: 90; display: none;

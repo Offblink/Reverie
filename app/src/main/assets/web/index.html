@@ -67,8 +67,6 @@
         <div class="p1" id="story-p1">尚未开始</div>
         <div class="p2" id="story-p2">—</div>
       </div>
-      <button class="icon-btn" id="replay-btn" aria-label="重听">🔁</button>
-      <button class="icon-btn" id="mic-btn" aria-label="麦克风">🎙</button>
     </header>
     <div class="story-flow" id="story-flow"></div>
     <div class="story-dock" id="story-dock"></div>
@@ -79,7 +77,7 @@
     <div class="home-head">
       <div>
         <h1 class="serif-title">设置</h1>
-        <p class="sub">LLM 与语音</p>
+        <p class="sub">LLM 端点</p>
       </div>
       <button class="icon-btn" data-back aria-label="返回">✕</button>
     </div>
@@ -92,59 +90,6 @@
         <input id="in-key" type="password" placeholder="sk-…" autocomplete="off"></label>
       <label class="set-row"><div class="lab">CHAT MODEL</div>
         <input id="in-chat" placeholder="gpt-4o-mini" autocomplete="off"></label>
-      <label class="set-row"><div class="lab">ASR MODEL（whisper，云端模式用）</div>
-        <input id="in-asr" placeholder="whisper-1" autocomplete="off"></label>
-      <div class="set-row"><div class="lab">语音识别方式</div>
-        <div class="seg-ctl" id="in-asr-mode">
-          <button data-v="device">端上识别</button><button data-v="cloud">云端 whisper</button>
-        </div></div>
-      <label class="set-row"><div class="lab">ASR BASE URL（云端；留空=跟随上面）</div>
-        <input id="in-asr-endpoint" placeholder="https://api.openai.com/v1" autocomplete="off"></label>
-      <label class="set-row"><div class="lab">ASR KEY（留空跟随；仅填写时更新）</div>
-        <input id="in-asr-key" type="password" placeholder="留空则用主 KEY" autocomplete="off"></label>
-    </div>
-
-    <div class="sec-label">播 报</div>
-    <div class="set-group glass">
-      <div class="set-row"><div class="lab">语音引擎（切换后重启应用生效）</div>
-        <div class="seg-ctl" id="in-tts-mode">
-          <button data-v="auto">自动</button><button data-v="system">系统</button><button data-v="device">端上</button>
-        </div>
-        <div class="tiny seg-hint" id="tts-mode-hint">自动＝优先系统 TTS，没有中文引擎时用内置端上模型</div></div>
-      <button class="set-row set-pick" id="voice-row"><div class="lab">音 系</div>
-        <div class="pick-val"><span id="voice-val">默认</span><span class="pick-arrow">›</span></div></button>
-      <label class="set-row"><div class="lab">语速（0.7–1.1，睡前 0.9）</div>
-        <input id="in-rate" placeholder="0.9" autocomplete="off"></label>
-      <label class="set-row"><div class="lab">麦克风窗口（秒）</div>
-        <input id="in-mic" placeholder="10" autocomplete="off"></label>
-    </div>
-
-    <!-- 音色选择抽屉（自绘，替代原生 select） -->
-    <div class="confirm-mask" id="voice-mask">
-      <div class="confirm-panel glass">
-        <div class="ct">选择音色</div>
-        <div class="pick-list" id="voice-list"></div>
-        <div class="crow"><button class="cno" id="voice-close">关闭</button></div>
-      </div>
-    </div>
-
-    <div class="sec-label">诊 断</div>
-    <div class="set-group glass">
-      <div class="set-row">
-        <div class="lab">麦克风电平（点「自检」后对着说话）</div>
-        <div class="mic-meter"><div class="mic-meter-fill" id="mic-level"></div></div>
-        <div class="tiny" id="mic-level-txt">未在录音；这里显示 rms 与触发门限</div>
-      </div>
-      <div class="set-row diag-btns">
-        <button class="diag-btn" id="mic-test-btn">麦克风自检 6s</button>
-        <button class="diag-btn" id="diag-refresh-btn">刷新日志</button>
-        <button class="diag-btn" id="diag-copy-btn">复制日志</button>
-        <button class="diag-btn" id="diag-auto-btn">自动刷新</button>
-      </div>
-      <div class="set-row">
-        <div class="lab">引擎日志（llm 每句到达 / tts 合成耗时与断粮 / asr 电平）</div>
-        <pre class="diag-log" id="diag-log">（点「刷新日志」）</pre>
-      </div>
     </div>
 
     <div class="set-actions">
@@ -153,6 +98,7 @@
     </div>
     <p class="tiny" id="set-hint" style="margin-top:14px;text-align:center"></p>
   </section>
+
 
 </div>
 <script src="common.js"></script>

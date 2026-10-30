@@ -20,7 +20,8 @@ import okhttp3.Response;
 
 /**
  * OpenAI 兼容 SSE 流式 chat/completions（SPEC §5）。
- * 边收边把 segment 字段增量解码、按 。！？!?… 切句回调 —— 第 1 句立刻可送 TTS。
+ * 边收边把 segment 字段增量解码、按 。！？!?… 切句回调 —— 第 1 句立刻上屏。
+ * M12 起消费方是 JS 渲染（纯文字），不再是 TTS。
  */
 public class LlmClient {
 

@@ -1,6 +1,5 @@
 package org.offblink.reverie.engine;
 
-import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -20,6 +19,9 @@ import okhttp3.Call;
  * 故事引擎状态机（SPEC §5）：newStory → 生成段 → （等选择）→ 生成下段 → … → 结局。
  * 编排 LlmClient / StoryStore；事件经 Emitter 推给 JS。
  * 单线程 executor 串行所有状态变更，无锁。
+ *
+ * M12 起为**纯文字**链路：不再有 TTS/ASR/重听/诊断——语音相关代码在 M12 提交里整块删除，
+ * 要找回看 git 历史（M11 提交 `2781b22` 及更早）。
  */
 public class StoryEngine {
 
@@ -28,18 +30,10 @@ public class StoryEngine {
         void state();                // 请求推全量快照
     }
 
-    public interface SettingsProvider {   // 解耦：引擎只要这几个值，不碰 Settings 类
+    public interface SettingsProvider {   // 解耦：引擎只要这三个值，不碰 Settings 类
         String endpoint();
         String apiKey();
         String chatModel();
-        float ttsRate();
-        String ttsVoice();
-        String ttsMode();       // auto=系统优先无中文切端上（默认）| system | device（M8）
-        String asrModel();
-        String asrMode();       // "device"=端上模型（默认）| "cloud"=云端 whisper（M7）
-        String asrEndpoint();   // 独立 ASR 端点；空 = 跟随 LLM（M6）
-        String asrApiKey();     // 独立 ASR key；空 = 跟随 LLM
-        int micWindowSec();
     }
 
     /** 主题风格块（SPEC §5.4） */
@@ -72,194 +66,28 @@ public class StoryEngine {
     }
 
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
-    private final Handler main = new Handler(Looper.getMainLooper());
     private final LlmClient llm = new LlmClient();
-    private final AsrRecorder recorder;
-    private final WhisperClient whisper = new WhisperClient();
-    private final DeviceAsr deviceAsr;
     private final StoryStore store;
     private final Emitter emitter;
     private final SettingsProvider settings;
-    private final TtsPlayer player;
 
     private Story story;
     private boolean busy = false;
-    private Call inflight;               // 生成中可取消（换故事时）
-    private volatile boolean ttsDegraded = false;   // 快照里带给 JS（boot 晚到时补告）
-    private boolean asrActive = false;               // 麦克风窗口进行中（exec 线程触发，synchronized 保护）
-    private volatile boolean foreground = true;     // 后台不录音（SPEC §6）
+    private Call inflight;   // 生成中可取消（换故事时）
 
-    public StoryEngine(Context ctx, StoryStore store, SettingsProvider settings, Emitter emitter) {
+    public StoryEngine(StoryStore store, SettingsProvider settings, Emitter emitter) {
         this.store = store;
         this.settings = settings;
         this.emitter = emitter;
-        this.recorder = new AsrRecorder(ctx);
-        this.deviceAsr = new DeviceAsr(ctx);
-        // 端上识别预热（拷模型+加载）。先让路 5s：冷启动时它和 TTS 绑定抢 CPU，
-        // 实测抢输会让 TTS 撞 12s 看门狗降级纯文字（M7 复测踩过）
-        new Thread(() -> {
-            try { Thread.sleep(5000); } catch (InterruptedException ignored) { }
-            deviceAsr.init();
-        }, "reverie-asr-init").start();
-        this.player = new TtsPlayer(ctx, settings.ttsRate(), settings.ttsMode(), new TtsPlayer.Listener() {
-            @Override public void onSpeaking(int seg, String text) {
-                emitTts("speaking", seg, text);
-            }
-            @Override public void onSegmentRead(int seg) {
-                emitTts("idle", seg, null);   // 段读完 → JS 弹选项（SPEC §6 时序）
-            }
-            @Override public void onReplayDone(int lastSeg) {
-                emitTts("replay-done", lastSeg, null);
-            }
-            @Override public void onDegraded(String why) {
-                ttsDegraded = true;
-                emitTts("degraded", -1, why);
-            }
-        });
-        player.init();
-        player.setVoice(settings.ttsVoice());   // 启动前存过音色 → init 就绪后生效（M6）
     }
 
-    /** 全量快照字段：TTS 是否已降级（JS boot 晚到时据此补 toast） */
-    public boolean ttsDegraded() { return ttsDegraded; }
-
-    /** 设置变更后即时生效（M6）：语速 + 音色，无需重启朗读 */
-    public void applyTtsSettings() {
-        player.setRate(settings.ttsRate());
-        player.setVoice(settings.ttsVoice());
-    }
-
-    /** TTS 音色清单（设置页用；引擎未就绪时空表） */
-    public java.util.List<String> voices() { return player.voices(); }
-
-    /** 实时电平事件（M10 诊断）：设置页电平条用 */
-    private void emitAsrLevel(int rms, int threshold) {
-        try {
-            JSONObject ev = new JSONObject();
-            ev.put("type", "asr-level");
-            ev.put("rms", rms);
-            ev.put("thr", threshold);
-            emitter.event(ev);
-        } catch (Exception ignored) { }
-    }
-
-    /**
-     * 麦克风自检（M10）：设置页专用，只测电平不判语音，结果经 mic-test 事件回 JS。
-     * 与故事流程互斥（asrActive 守卫）。
-     */
-    public boolean micTest(int sec) {
-        synchronized (this) {
-            if (asrActive) return false;
-            asrActive = true;
-        }
-        boolean ok = recorder.startTest(sec, new AsrRecorder.Listener() {
-            @Override public void onAudio(byte[] wav) { }
-            @Override public void onTimeout(int peakRms) {
-                synchronized (StoryEngine.this) { asrActive = false; }
-                emitMicTest(true, peakRms, null);
-            }
-            @Override public void onError(String msg) {
-                synchronized (StoryEngine.this) { asrActive = false; }
-                emitMicTest(false, 0, msg);
-            }
-            @Override public void onLevel(int rms, int threshold) { emitAsrLevel(rms, threshold); }
-        });
-        if (!ok) { synchronized (this) { asrActive = false; } }
-        return ok;
-    }
-
-    private void emitMicTest(boolean ok, int peak, String msg) {
-        try {
-            JSONObject ev = new JSONObject();
-            ev.put("type", "mic-test");
-            ev.put("ok", ok);
-            ev.put("peak", peak);
-            if (msg != null) ev.put("msg", msg);
-            emitter.event(ev);
-        } catch (Exception ignored) { }
-    }
-
-    /** 试听音色（M9）：生成中拒绝；会打断当前朗读（设置页专用入口） */
-    public boolean previewVoice(String name) {
-        synchronized (this) { if (busy) return false; }
-        return player.previewSpeak(name);
-    }
-
-    /** 重听单段（SPEC §3.2 replaySegment）；未回答的段连选项一起念（M9） */
-    public synchronized boolean replaySegment(int index) {
-        if (story == null || busy) return false;
-        if (index < 0 || index >= story.segments.size()) return false;
-        Story.Segment seg = story.segments.get(index);
-        player.beginReplay(index);
-        for (String sent : splitSentences(seg.text)) player.replay(index, sent);
-        if (seg.choice == -1 && !seg.isFinal) {
-            String p = optionsPrompt(seg.options);
-            if (!p.isEmpty()) player.replay(index, p);
-        }
-        player.endReplay();
-        return true;
-    }
-
-    /** 重听全文：从 fromIndex 到最后（SPEC §3.2 replay） */
-    public synchronized boolean replay(Integer fromIndex) {
-        if (story == null || busy || story.segments.isEmpty()) return false;
-        int from = fromIndex == null ? 0 : Math.max(0, fromIndex);
-        if (from >= story.segments.size()) return false;
-        int last = story.segments.size() - 1;
-        player.beginReplay(last);
-        for (int i = from; i <= last; i++) {
-            for (String sent : splitSentences(story.segments.get(i).text)) player.replay(i, sent);
-        }
-        player.endReplay();
-        return true;
-    }
-
-    public void stopReplay() { player.stopReplay(); }
-
-    public void shutdown() { stopAsr(); player.shutdown(); }
-
-    /** 选项朗读文案（M9）：「请选择。一，推开门看看。二，…。」；无有效选项返回空串 */
-    static String optionsPrompt(List<String> opts) {
-        if (opts == null || opts.isEmpty()) return "";
-        StringBuilder sb = new StringBuilder("请选择。");
-        String[] nums = {"一", "二", "三", "四", "五"};
-        int n = Math.min(opts.size(), nums.length);
-        boolean any = false;
-        for (int i = 0; i < n; i++) {
-            String o = opts.get(i);
-            if (o == null || o.trim().isEmpty()) continue;
-            sb.append(nums[i]).append('，').append(o.trim()).append('。');
-            any = true;
-        }
-        return any ? sb.toString() : "";
-    }
-
-    /** 按句末标点切句（重听入队粒度；与 LlmClient 流式切句同标点集） */
-    static List<String> splitSentences(String text) {
-        List<String> out = new ArrayList<>();
-        if (text == null || text.isEmpty()) return out;
-        StringBuilder cur = new StringBuilder();
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            cur.append(c);
-            if ("。！？!?…".indexOf(c) >= 0) {
-                String s = cur.toString().trim();
-                if (!s.isEmpty()) out.add(s);
-                cur.setLength(0);
-            }
-        }
-        String tail = cur.toString().trim();
-        if (!tail.isEmpty()) out.add(tail);
-        return out;
-    }
+    /** 全量快照字段由桥的 getState 自行组装（引擎只提供 story()/busy()） */
 
     public synchronized Story story() { return story; }
     public synchronized boolean busy() { return busy; }
 
     /** 新故事：建档落盘，立即生成第 1 段。返回故事 id。pov：first|third（其余回落 third）。 */
     public String newStory(final String themeId, final String tier, final String pov) {
-        stopAsr();                // 上一本还在开麦/在念的话，先停
-        player.halt();
         final Story s = new Story();
         s.id = String.valueOf(System.currentTimeMillis());
         s.themeId = themeId;
@@ -280,8 +108,6 @@ public class StoryEngine {
         Story s = store.load(id);
         if (s == null) return false;
         if (inflight != null) { inflight.cancel(); }
-        stopAsr();
-        player.halt();
         story = s;
         busy = false;
         emitter.state();
@@ -316,8 +142,6 @@ public class StoryEngine {
         if (busy || story == null) return false;
         Story.Segment last = story.last();
         if (last == null || last.isFinal || last.choice != -1 || idx < 0 || idx >= last.options.size()) return false;
-        player.stopReplay();   // 正在重听的话，选择即打断
-        stopAsr();             // 选择已下（点击或语音）→ 关麦
         last.choice = idx;
         try { store.save(story); } catch (Exception ignored) { }
         emitChoiceMade(story.segments.size() - 1, idx, null);
@@ -326,140 +150,15 @@ public class StoryEngine {
         return true;
     }
 
-    /** M5：语音识别命中后走这里（带识别原文） */
-    public synchronized boolean chooseHeard(int idx, String heard) {
-        if (choose(idx)) {
-            Story.Segment last = story.last();
-            if (last != null) last.heard = heard;
-            try { store.save(story); } catch (Exception ignored) { }
-            return true;
-        }
-        return false;
-    }
-
-    /* ---------- ASR（M5，SPEC §7） ---------- */
-
-    public void setForeground(boolean fg) {
-        foreground = fg;
-        if (!fg) stopAsr();   // 退后台即关麦（录音需前台，SPEC §6）
-    }
-
-    /**
-     * 开麦：由 JS 在弹选项坞时触发（单一触发点——重听/补报的 tts idle
-     * 不弹坞也就不会误开麦）。守卫：有故事、非 busy、落点未回答、前台、没在录。
-     */
-    public synchronized boolean startAsr() {
-        if (!foreground || story == null || busy) return false;
-        Story.Segment last = story.last();
-        if (last == null || last.isFinal || last.choice != -1) return false;
-        if (asrActive) return true;
-        final int idx = last.index;
-        final int win = settings.micWindowSec();
-        asrActive = true;
-        boolean started = recorder.start(win, new AsrRecorder.Listener() {
-            @Override public void onAudio(byte[] wav) { exec.execute(() -> transcribe(idx, wav)); }
-            @Override public void onTimeout(int peakRms) {
-                exec.execute(() -> asrEndedTimeout(idx, peakRms));
-            }
-            @Override public void onError(String msg) { exec.execute(() -> asrEnded("error", idx, null, null, msg)); }
-            @Override public void onLevel(int rms, int threshold) { emitAsrLevel(rms, threshold); }
-        });
-        if (!started) { asrActive = false; return false; }
-        emitAsr("listening", idx, null, null, win, null);
-        return true;
-    }
-
-    /** 手动关麦：丢弃当前录音，无事件（JS 自己清倒计时环） */
-    public synchronized void stopAsr() {
-        asrActive = false;
-        recorder.stop();
-    }
-
-    /** 检出语音 → 转文字（M7：端上模型优先，云端 whisper 回落；回调回 exec 处理结果） */
-    private void transcribe(int idx, byte[] wav) {
-        final String mode;
-        final String ep, key, model;
-        synchronized (this) {
-            if (!asrActive) return;
-            mode = settings.asrMode();
-            ep = settings.asrEndpoint().isEmpty() ? settings.endpoint() : settings.asrEndpoint();
-            key = settings.asrApiKey().isEmpty() ? settings.apiKey() : settings.asrApiKey();
-            model = settings.asrModel();
-        }
-        if ("device".equals(mode)) {
-            try {
-                if (!deviceAsr.ready()) throw new IllegalStateException("识别引擎还在预热，稍后再试");
-                String text = deviceAsr.transcribe(DeviceAsr.wavToFloat(wav));
-                exec.execute(() -> handleHeard(idx, text));
-            } catch (Throwable e) {
-                exec.execute(() -> asrEnded("error", idx, null, null, "端上识别失败: " + e.getMessage()));
-            }
-            return;
-        }
-        whisper.transcribe(ep, key, model, wav,
-                new WhisperClient.Listener() {
-                    @Override public void onText(String text) { exec.execute(() -> handleHeard(idx, text)); }
-                    @Override public void onError(String msg) { exec.execute(() -> asrEnded("error", idx, null, null, msg)); }
-                });
-    }
-
-    /** 识别文本 → 本地匹配 → 命中续写 / 未命中回落点击 */
-    private void handleHeard(int idx, String text) {
-        String heard = (text == null || text.isEmpty()) ? null : text;
-        int choice = -1;
-        synchronized (this) {
-            if (!asrActive) return;
-            asrActive = false;
-            if (heard != null && story != null) {
-                Story.Segment last = story.last();
-                if (last != null && last.index == idx) choice = OptionMatcher.match(heard, last.options);
-            }
-        }
-        if (heard == null) { emitAsr("timeout", idx, null, null, null, null); return; }
-        if (choice >= 0) {
-            emitAsr("matched", idx, heard, choice, null, null);
-            chooseHeard(choice, heard);
-        } else {
-            emitAsr("timeout", idx, heard, null, null, null);   // 未命中 = 无效响应（SPEC §7）
-        }
-    }
-
-    private synchronized void asrEnded(String state, int idx, String heard, Integer choice, String msg) {
-        asrActive = false;
-        emitAsr(state, idx, heard, choice, null, msg);
-    }
-
-    /** 超时（M9）：带窗口峰值音量，JS 据此区分「没出声」vs「说了但没过阈」 */
-    private synchronized void asrEndedTimeout(int idx, int peakRms) {
-        asrActive = false;
-        try {
-            JSONObject ev = new JSONObject();
-            ev.put("type", "asr-state");
-            ev.put("state", "timeout");
-            ev.put("index", idx);
-            ev.put("peakRms", peakRms);
-            emitter.event(ev);
-        } catch (Exception ignored) { }
-    }
-
-    /** 麦克风状态机事件（SPEC §3.2 asr-state） */
-    private void emitAsr(String state, int index, String heard, Integer choice, Integer windowSec, String msg) {
-        try {
-            JSONObject ev = new JSONObject();
-            ev.put("type", "asr-state");
-            ev.put("state", state);
-            ev.put("index", index);
-            if (heard != null) ev.put("heard", heard);
-            if (choice != null) ev.put("choiceIndex", choice);
-            if (windowSec != null) ev.put("windowSec", windowSec);
-            if (msg != null) ev.put("msg", msg);
-            emitter.event(ev);
-        } catch (Exception ignored) { }
-    }
-
     /** 重试当前段（error 后） */
     public synchronized void retry() {
         if (!busy) generate();
+    }
+
+    /** 换故事/退后台：掐掉在途生成 */
+    public synchronized void shutdown() {
+        if (inflight != null) { inflight.cancel(); }
+        exec.shutdownNow();
     }
 
     /* ---------- 生成 ---------- */
@@ -485,17 +184,10 @@ public class StoryEngine {
         }
 
         final List<String[]> messages = buildMessages(story, nextIndex);
-        final long[] llmT0 = { System.currentTimeMillis() };
-        final int[] sentIdx = { 0 };
-        Diag.add("llm", "seg#" + nextIndex + " 请求开始 endpoint=" + endpoint + " model=" + model);
         try {
             inflight = llm.stream(endpoint, apiKey, model, messages, new LlmClient.Listener() {
                 @Override public void onSentence(final String sentence) {
-                    // 诊断：LLM 流式到句的节奏直接决定 TTS 是否会断粮（真机句间隔大的头号嫌疑）
-                    Diag.add("llm", "句#" + (sentIdx[0]++) + " 到达 +" + (System.currentTimeMillis() - llmT0[0])
-                            + "ms len=" + sentence.length());
                     emitDelta(sentence);
-                    player.enqueue(nextIndex, sentence);   // 流式边生成边读（SPEC §6）
                 }
 
                 @Override public void onComplete(final LlmClient.Result res) {
@@ -512,19 +204,12 @@ public class StoryEngine {
                         try { store.save(story); } catch (Exception ignored) { }
                         busy = false;
                     }
-                    emitDone(res);
-                    // 选项也要读（M9）：念完正文再念"请选择。一，…。二，…"，念完才 seal →
-                    // idle（弹坞+开麦）推迟到选项读完——睡前闭眼靠听就能选
-                    String optPrompt = optionsPrompt(res.options);
-                    if (!optPrompt.isEmpty()) player.enqueue(nextIndex, optPrompt);
-                    player.seal(nextIndex);   // 文本到齐；TTS 念完最后一句 → idle → JS 弹选项
+                    emitDone(res);   // 纯文字：选项在此刻就能选（JS 直接弹坞）
                     emitter.state();
-                    // 结局段后不再自动续（choose 只在 !isFinal 时可用）
                 }
 
                 @Override public void onError(final String msg) {
                     synchronized (StoryEngine.this) { busy = false; }
-                    player.abandon(nextIndex);   // 半截文不念出来
                     emitError("llm", msg);
                 }
             });
@@ -634,22 +319,6 @@ public class StoryEngine {
             ev.put("type", "error");
             ev.put("stage", stage);
             ev.put("msg", msg);
-            emitter.event(ev);
-        } catch (Exception ignored) { }
-    }
-
-    /**
-     * TTS 事件 → JS（tts-state）。
-     * state: speaking（句高亮）/ idle（段读完→弹选项）/ replay-done / degraded。
-     * 由 TtsPlayer 锁内回调触发——这里只构造 JSON + 经桥投递，不碰 player。
-     */
-    private void emitTts(String state, int index, String text) {
-        try {
-            JSONObject ev = new JSONObject();
-            ev.put("type", "tts-state");
-            ev.put("state", state);
-            ev.put("index", index);
-            if (text != null) ev.put("text", text);
             emitter.event(ev);
         } catch (Exception ignored) { }
     }
