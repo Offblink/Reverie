@@ -1,0 +1,4 @@
+# 内置模型/词典资产一律按二进制存：禁 EOL 转换
+# （app/src/main/assets 下 espeak 字典等是"文本检测"文件，checkout 时 LF→CRLF
+#  会改字节：espeak 解析失败 + DeviceTts 的字节校验在全新 clone 上误判）
+app/src/main/assets/** -text
