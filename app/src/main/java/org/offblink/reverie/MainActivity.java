@@ -10,6 +10,10 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import org.json.JSONObject;
+import org.offblink.reverie.engine.StoryEngine;
+import org.offblink.reverie.engine.StoryStore;
+
 /**
  * 壳：WebView 宿主 + 桥注册 + edge-to-edge + 返回键转发。
  * 全部可见 UI 在 assets/web（SPEC §3.1），原生不放 UI 控件。
@@ -25,6 +29,20 @@ public class MainActivity extends Activity implements ReverieBridge.Host {
 
         Settings settings = new Settings(this);
         bridge = new ReverieBridge(settings, this);
+
+        // 故事引擎（M2）：事件经桥推 JS；快照变化桥主动推
+        StoryEngine engine = new StoryEngine(
+                new StoryStore(this),
+                new StoryEngine.SettingsProvider() {
+                    @Override public String endpoint() { return settings.endpoint(); }
+                    @Override public String apiKey() { return settings.apiKey(); }
+                    @Override public String chatModel() { return settings.chatModel(); }
+                },
+                new StoryEngine.Emitter() {
+                    @Override public void event(JSONObject ev) { bridge.emitEvent(ev); }
+                    @Override public void state() { bridge.pushStateQuiet(); }
+                });
+        bridge.attach(engine);
 
         webView = new WebView(this);
         setContentView(webView);
@@ -45,7 +63,29 @@ public class MainActivity extends Activity implements ReverieBridge.Host {
         }
 
         applyInsets();
+        registerBackHandler();
         webView.loadUrl("file:///android_asset/web/index.html");
+    }
+
+    /**
+     * 返回键双轨（SPEC §3.2 契约：先问 web，页面不消费才 finish）：
+     * API 33+ 走 OnBackInvokedCallback（targetSdk 37 的派发路径，onBackPressed 不触发）；
+     * 低版本走 onBackPressed 覆写。
+     */
+    private void registerBackHandler() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
+        }
+    }
+
+    private void handleBack() {
+        android.util.Log.d("reverie", "back pressed, asking JS");
+        runOnUiThread(() -> webView.evaluateJavascript(
+                "window.Host && Host.back ? Host.back() : false", value -> {
+                    android.util.Log.d("reverie", "back result=" + value);
+                    if (!"true".equals(value)) finish();
+                }));
     }
 
     /** 状态栏透明后，把系统栏 inset 传给 WebView 由 CSS env(safe-area-inset-*) 消费 */
@@ -63,13 +103,10 @@ public class MainActivity extends Activity implements ReverieBridge.Host {
         }
     }
 
-    /** Android 返回键：先问 web（Host.back），页面不消费才 finish（Spore 同款契约） */
+    /** Android 返回键（API < 33 路径；33+ 走 OnBackInvokedCallback） */
     @Override
     public void onBackPressed() {
-        runOnUiThread(() -> webView.evaluateJavascript(
-                "window.Host && Host.back ? Host.back() : false", value -> {
-                    if (!"true".equals(value)) finish();
-                }));
+        handleBack();
     }
 
     /* ---------- ReverieBridge.Host：原生 → JS ---------- */

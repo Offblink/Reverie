@@ -12,12 +12,18 @@
         android:allowBackup="true"
         android:label="Reverie"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Reverie">
+        <!-- usesCleartextTraffic：用户可配 http 端点（自建网关/局域网 mock，Spore 同款口径） -->
 
         <!-- 全 UI 在 WebView（assets/web/index.html），原生只做壳与引擎 -->
+        <!-- targetSdk 37 上系统按预测式返回派发：不 opt-in + 不注册回调时，
+             返回键直接 finish，onBackPressed 不再触发（实测踩过）。
+             opt-in 后 API 33+ 走 OnBackInvokedCallback（见 MainActivity），低版本仍走 onBackPressed。 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:enableOnBackInvokedCallback="true"
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>

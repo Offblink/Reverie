@@ -87,10 +87,12 @@ var Zoom = (function () {
     return true;
   }
 
-  /** 根页直切（不经缩放）：启动/重置用 */
+  /** 根页直切（不经缩放）：启动/重置用。根页入栈但 from=null——
+       back() 只在 depth>1 时弹栈，所以根页永不被弹出，from 不会被解引用。 */
   function root(page) {
     while (stack.length) stack.pop().page.classList.remove('on');
     page.classList.add('on');
+    stack.push({ page: page, from: null });
   }
 
   function depth() { return stack.length; }
