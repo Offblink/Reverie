@@ -72,7 +72,11 @@
   function zoomToStory() { Zoom.to($('start-btn'), V.story); }
 
   $('go-shelf').addEventListener('click', function () { renderShelf(); V.shelf.classList.add('on'); });
-  $('go-settings').addEventListener('click', function () { loadSettings(); V.settings.classList.add('on'); });
+  $('go-settings').addEventListener('click', function () {
+    loadSettings();
+    refreshDiag();
+    V.settings.classList.add('on');
+  });
   [].forEach.call(document.querySelectorAll('[data-back]'), function (b) {
     b.addEventListener('click', function () {
       var page = b.closest('.vpage');
@@ -271,6 +275,29 @@
   $('voice-close').addEventListener('click', function () { $('voice-mask').classList.remove('on'); });
   $('voice-mask').addEventListener('click', function (e) {
     if (e.target === $('voice-mask')) $('voice-mask').classList.remove('on');
+  });
+
+  /* ---------- 诊断（M10）：电平条 + 引擎日志 + 麦克风自检 ---------- */
+  var diagTimer = 0;
+  function refreshDiag() {
+    var arr = bridge('getDiag', { n: 80 }) || [];
+    $('diag-log').textContent = arr.length ? arr.join('\n') : '（暂无日志）';
+  }
+  function setMicLevel(rms, thr) {
+    $('mic-level').style.width = Math.min(100, Math.round(rms / 6000 * 100)) + '%';
+    $('mic-level-txt').textContent = 'rms ' + rms + ' / 门限 ' + thr;
+  }
+  $('mic-test-btn').addEventListener('click', function () {
+    var r = bridge('micTest', { sec: 6 });
+    toast(r && r.ok ? '自检中，请对着手机说话…' : '现在不能自检（正在录音或生成中）');
+  });
+  $('diag-refresh-btn').addEventListener('click', refreshDiag);
+  $('diag-auto-btn').addEventListener('click', function () {
+    if (diagTimer) {
+      clearInterval(diagTimer); diagTimer = 0; this.classList.remove('on');
+    } else {
+      diagTimer = setInterval(refreshDiag, 2000); this.classList.add('on'); refreshDiag();
+    }
   });
 
   bindSeg('in-asr-mode');
@@ -507,6 +534,16 @@
           }
           // 降级后段读完事件仍会来（引擎按读完结算），pendingDock 照常消费
         }
+        break;
+      }
+      case 'asr-level': {
+        setMicLevel(ev.rms || 0, ev.thr || 0);
+        break;
+      }
+      case 'mic-test': {
+        toast(ev.ok ? '自检通过：峰值音量 ' + ev.peak + '（麦克风有信号）'
+                    : (ev.msg || '自检失败'));
+        refreshDiag();
         break;
       }
       case 'choice-made': {

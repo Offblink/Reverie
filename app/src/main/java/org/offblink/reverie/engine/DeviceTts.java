@@ -182,9 +182,11 @@ public final class DeviceTts {
 
             OfflineTtsModelConfig m = new OfflineTtsModelConfig();
             m.setKokoro(kokoro);
-            // 4 线程：kokoro int8 在手机上 RTF 约 0.3–0.6，2 线程时合成赶不上播放，
-            // 队列见底就是"句间隔太大"（模拟器实测 gen 4.4–12.1s vs 播放 3.6–9.3s）
-            m.setNumThreads(4);
+            // 线程数随 CPU 核数自适应（M10）：合成慢于播放 = 句间空档，
+            // 8 核机给 6 线程能明显压 RTF；低核机保底 2。留 1-2 核对 UI/网络。
+            int threads = Math.min(6, Math.max(2, Runtime.getRuntime().availableProcessors() - 1));
+            m.setNumThreads(threads);
+            Diag.add("tts", "合成线程数=" + threads + " (cores=" + Runtime.getRuntime().availableProcessors() + ")");
             m.setDebug(false);
 
             OfflineTtsConfig c = new OfflineTtsConfig();
@@ -202,6 +204,8 @@ public final class DeviceTts {
             player.start();
             Log.i(TAG, "device-tts(kokoro) ready in " + (System.currentTimeMillis() - t0)
                     + "ms sampleRate=" + tts.sampleRate() + " speakers=" + tts.numSpeakers());
+            Diag.add("tts", "kokoro 就绪 耗时" + (System.currentTimeMillis() - t0)
+                    + "ms sr=" + tts.sampleRate() + " speakers=" + tts.numSpeakers());
         } catch (Throwable e) {   // UnsatisfiedLinkError 等也要兜住
             Log.w(TAG, "device-tts init failed", e);
             initFailed = true;
@@ -261,8 +265,12 @@ public final class DeviceTts {
                     continue;
                 }
                 clips.put(new Clip(j.id, floatToPcm16(padTail(s, ga.getSampleRate())), ga.getSampleRate()));
-                Log.d(TAG, "gen " + j.id + " " + s.length + " samples in "
-                        + (System.currentTimeMillis() - t0) + "ms sid=" + useSid);
+                long genMs = System.currentTimeMillis() - t0;
+                long audioMs = s.length * 1000L / ga.getSampleRate();
+                // RTF = 合成耗时 / 音频时长。>1 表示合成赶不上播放，句间必然出现等待
+                Diag.add("tts", "gen " + j.id + " " + audioMs + "ms音频 耗时" + genMs
+                        + "ms RTF=" + String.format(java.util.Locale.US, "%.2f", genMs / (float) Math.max(1, audioMs))
+                        + " sid=" + useSid + " 队列=" + clips.size());
             } catch (Throwable e) {
                 Log.w(TAG, "generate failed " + j.id, e);
                 listener.onStart(j.id);
@@ -276,7 +284,13 @@ public final class DeviceTts {
     private void playerLoop() {
         while (running.get()) {
             Clip c;
+            long waitStart = System.currentTimeMillis();
             try { c = clips.take(); } catch (InterruptedException e) { return; }
+            long waitMs = System.currentTimeMillis() - waitStart;
+            if (waitMs > 80) {
+                // 播放端在 clips.take() 上阻塞 = 队列见底，这就是用户听到的"句间空档"
+                Diag.add("tts", "断粮 " + waitMs + "ms（等下一句合成）");
+            }
             if (!running.get()) return;
             listener.onStart(c.id);
             try {
@@ -284,6 +298,7 @@ public final class DeviceTts {
             } catch (Throwable e) {
                 Log.w(TAG, "play failed " + c.id, e);
             }
+            Diag.add("tts", "播完 " + c.id + " " + (c.pcm.length * 1000L / c.sampleRate) + "ms音频");
             listener.onDone(c.id);
         }
     }

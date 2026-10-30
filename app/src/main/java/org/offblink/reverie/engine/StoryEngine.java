@@ -132,6 +132,53 @@ public class StoryEngine {
     /** TTS 音色清单（设置页用；引擎未就绪时空表） */
     public java.util.List<String> voices() { return player.voices(); }
 
+    /** 实时电平事件（M10 诊断）：设置页电平条用 */
+    private void emitAsrLevel(int rms, int threshold) {
+        try {
+            JSONObject ev = new JSONObject();
+            ev.put("type", "asr-level");
+            ev.put("rms", rms);
+            ev.put("thr", threshold);
+            emitter.event(ev);
+        } catch (Exception ignored) { }
+    }
+
+    /**
+     * 麦克风自检（M10）：设置页专用，只测电平不判语音，结果经 mic-test 事件回 JS。
+     * 与故事流程互斥（asrActive 守卫）。
+     */
+    public boolean micTest(int sec) {
+        synchronized (this) {
+            if (asrActive) return false;
+            asrActive = true;
+        }
+        boolean ok = recorder.startTest(sec, new AsrRecorder.Listener() {
+            @Override public void onAudio(byte[] wav) { }
+            @Override public void onTimeout(int peakRms) {
+                synchronized (StoryEngine.this) { asrActive = false; }
+                emitMicTest(true, peakRms, null);
+            }
+            @Override public void onError(String msg) {
+                synchronized (StoryEngine.this) { asrActive = false; }
+                emitMicTest(false, 0, msg);
+            }
+            @Override public void onLevel(int rms, int threshold) { emitAsrLevel(rms, threshold); }
+        });
+        if (!ok) { synchronized (this) { asrActive = false; } }
+        return ok;
+    }
+
+    private void emitMicTest(boolean ok, int peak, String msg) {
+        try {
+            JSONObject ev = new JSONObject();
+            ev.put("type", "mic-test");
+            ev.put("ok", ok);
+            ev.put("peak", peak);
+            if (msg != null) ev.put("msg", msg);
+            emitter.event(ev);
+        } catch (Exception ignored) { }
+    }
+
     /** 试听音色（M9）：生成中拒绝；会打断当前朗读（设置页专用入口） */
     public boolean previewVoice(String name) {
         synchronized (this) { if (busy) return false; }
@@ -315,6 +362,7 @@ public class StoryEngine {
                 exec.execute(() -> asrEndedTimeout(idx, peakRms));
             }
             @Override public void onError(String msg) { exec.execute(() -> asrEnded("error", idx, null, null, msg)); }
+            @Override public void onLevel(int rms, int threshold) { emitAsrLevel(rms, threshold); }
         });
         if (!started) { asrActive = false; return false; }
         emitAsr("listening", idx, null, null, win, null);
@@ -437,9 +485,15 @@ public class StoryEngine {
         }
 
         final List<String[]> messages = buildMessages(story, nextIndex);
+        final long[] llmT0 = { System.currentTimeMillis() };
+        final int[] sentIdx = { 0 };
+        Diag.add("llm", "seg#" + nextIndex + " 请求开始 endpoint=" + endpoint + " model=" + model);
         try {
             inflight = llm.stream(endpoint, apiKey, model, messages, new LlmClient.Listener() {
                 @Override public void onSentence(final String sentence) {
+                    // 诊断：LLM 流式到句的节奏直接决定 TTS 是否会断粮（真机句间隔大的头号嫌疑）
+                    Diag.add("llm", "句#" + (sentIdx[0]++) + " 到达 +" + (System.currentTimeMillis() - llmT0[0])
+                            + "ms len=" + sentence.length());
                     emitDelta(sentence);
                     player.enqueue(nextIndex, sentence);   // 流式边生成边读（SPEC §6）
                 }

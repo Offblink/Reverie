@@ -8,6 +8,7 @@ import android.webkit.JavascriptInterface;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.offblink.reverie.engine.Diag;
 import org.offblink.reverie.engine.LlmClient;
 import org.offblink.reverie.engine.StoryEngine;
 
@@ -102,6 +103,32 @@ public class ReverieBridge {
                 for (String v : engine.voices()) arr.put(v);
             }
             return arr.toString();
+        } catch (Exception e) {
+            return err(e);
+        }
+    }
+
+    /** 诊断日志（M10）：{n?} → 最近 n 条字符串数组；设置页诊断面板用 */
+    @JavascriptInterface
+    public String getDiag(String argsJson) {
+        try {
+            int n = (argsJson == null || argsJson.isEmpty()) ? 60
+                    : new JSONObject(argsJson).optInt("n", 60);
+            return Diag.dump(n);
+        } catch (Exception e) {
+            return "[]";
+        }
+    }
+
+    /** 麦克风自检（M10）：{sec?} → {ok}；结果经 mic-test / asr-level 事件回 JS */
+    @JavascriptInterface
+    public String micTest(String argsJson) {
+        try {
+            int sec = (argsJson == null || argsJson.isEmpty()) ? 6
+                    : new JSONObject(argsJson).optInt("sec", 6);
+            JSONObject o = new JSONObject();
+            o.put("ok", engine != null && engine.micTest(sec));
+            return o.toString();
         } catch (Exception e) {
             return err(e);
         }

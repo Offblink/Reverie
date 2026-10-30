@@ -72,6 +72,8 @@
 | `setSettings` | `{...}` | `{ok}`（语速/音色即时生效，无需重启朗读） |
 | `getVoices` | — | `[name,…]` TTS 音色清单（系统后端=系统音色；端上后端=kokoro 中文音色名）；TTS 未就绪为空表 |
 | `previewTts` | `{name}` | `{ok}` 试听该音色（单念一句固定文案，不改默认；生成中拒绝） |
+| `getDiag` | `{n?}` | 最近 n 条诊断日志（字符串数组）；设置页诊断面板用 |
+| `micTest` | `{sec?}` | `{ok}` 麦克风自检（只测电平，默认 6s）；结果经 `mic-test`/`asr-level` 事件回 JS |
 | `testEndpoint` | — | `{ok, latencyMs, msg}` 连通性探测 |
 | `startAsr` / `stopAsr` | — | `{ok}` / `{ok, needPermission}`（无 RECORD_AUDIO 时先弹系统授权） |
 
@@ -84,6 +86,8 @@
 | `tts-state` | `{state: playing\|idle, index}` | TTS 开始/结束一段 |
 | `choice-made` | `{index, choiceIndex, heard?}` | 选择已记录（点击或语音） |
 | `asr-state` | `{state: listening\|matched\|timeout\|error, index?, heard?, choiceIndex?, windowSec?, msg?}` | 麦克风状态机（listening 带窗口秒数供倒计时环；未命中走 timeout+heard；error 带 msg） |
+| `asr-level` | `{rms, thr}` | 实时麦克风电平（约 200ms 一次；诊断面板电平条） |
+| `mic-test` | `{ok, peak, msg?}` | 自检结束：ok=有信号（peak 为峰值音量） |
 | `story-done` | `{id}` | 结局段朗读完 |
 | `error` | `{stage: llm\|tts\|asr, msg}` | 任一环节失败 |
 
@@ -257,6 +261,7 @@ sequenceDiagram
 | M7 | 端上识别：sherpa-onnx zipformer2 CTC int8（26MB 内置），默认；ASR 独立端点 | 说出「第一个」端上转写命中续写；模型零配置离线可用 |
 | M8 | 404 报错自证（URL+归一化）；设置页去原生控件（分段胶囊+音色抽屉）；端上 TTS（VITS fanchen-C 137MB 内置，auto 兜底系统无中文）；人称选择（first/third） | 系统无中文引擎的设备（小米）auto 模式自动切端上出声；人称注入 system prompt（单测钉）；脏端点保存即归一 |
 | M9 | 选项朗读（段文后念「请选择。一，…」再弹坞开麦）；端上 TTS 换代 Kokoro v1.1-zh（100 中文音色/默认男声 zm_010/句尾静音垫/试听）；ASR VAD 收敛加速+超时带峰值音量自诊断 | 闭眼听选项可直接语音选；kokoro 出声且男声、句间停顿自然；轻声说话能检出（peakRms 诊断区分没出声/没过阈） |
+| M10 | 设备侧诊断：环形日志（llm 每句到达 / tts 合成耗时+RTF+断粮等待 / asr 电平与超时）+ 设置页诊断面板（实时电平条 / 最近 80 条 / 麦克风自检 6s）+ 零信号自动换 MIC 音源 | 真机不连 adb 也能自证：句间隔大是「llm 到句慢」还是「tts RTF>1」；麦克风是「没信号」还是「没过阈」|
 
 每增量收尾：`assembleDebug` + 该增量直接触及路径的冒烟；UI 改动真机截图验收。
 

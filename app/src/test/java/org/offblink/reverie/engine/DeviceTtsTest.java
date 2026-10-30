@@ -55,7 +55,7 @@ public class DeviceTtsTest {
     public void padTailAppendsSilence() {
         float[] in = new float[100];
         float[] out = DeviceTts.padTail(in, 24000);
-        assertEquals(100 + 10800, out.length);       // 0.45s @ 24kHz
+        assertEquals(100 + 3600, out.length);        // 0.15s @ 24kHz（M9 实测：0.45s 会被听成句间隔过大）
         assertEquals(0f, out[out.length - 1], 1e-9);
     }
 
