@@ -56,6 +56,7 @@ public class ReverieBridge {
                     o.put("story", JSONObject.NULL);
                     o.put("busy", false);
                 }
+                o.put("ttsDegraded", engine != null && engine.ttsDegraded());
             }
             return o.toString();
         } catch (JSONException e) {
@@ -151,6 +152,42 @@ public class ReverieBridge {
         } catch (Exception e) {
             return err(e);
         }
+    }
+
+    /* ---------- 重听（M4，SPEC §3.2） ---------- */
+
+    /** 重听全文：不带参 = 从头；带 fromSegment = 从指定段 */
+    @JavascriptInterface
+    public String replay(String argsJson) {
+        try {
+            Integer from = null;
+            if (argsJson != null && !argsJson.isEmpty()) {
+                JSONObject a = new JSONObject(argsJson);
+                if (a.has("fromSegment") && !a.isNull("fromSegment")) from = a.getInt("fromSegment");
+            }
+            JSONObject o = new JSONObject();
+            o.put("ok", engine.replay(from));
+            return o.toString();
+        } catch (Exception e) {
+            return err(e);
+        }
+    }
+
+    @JavascriptInterface
+    public String replaySegment(String argsJson) {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("ok", engine.replaySegment(new JSONObject(argsJson).getInt("index")));
+            return o.toString();
+        } catch (Exception e) {
+            return err(e);
+        }
+    }
+
+    @JavascriptInterface
+    public String stopReplay() {
+        engine.stopReplay();
+        return ok();
     }
 
     @JavascriptInterface

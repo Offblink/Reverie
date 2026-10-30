@@ -22,6 +22,7 @@ public class MainActivity extends Activity implements ReverieBridge.Host {
 
     private WebView webView;
     private ReverieBridge bridge;
+    private StoryEngine engine;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -30,19 +31,22 @@ public class MainActivity extends Activity implements ReverieBridge.Host {
         Settings settings = new Settings(this);
         bridge = new ReverieBridge(settings, this);
 
-        // 故事引擎（M2）：事件经桥推 JS；快照变化桥主动推
+        // 故事引擎（M2）+ TTS 播放器（M4）：事件经桥推 JS；快照变化桥主动推
         StoryEngine engine = new StoryEngine(
+                this,
                 new StoryStore(this),
                 new StoryEngine.SettingsProvider() {
                     @Override public String endpoint() { return settings.endpoint(); }
                     @Override public String apiKey() { return settings.apiKey(); }
                     @Override public String chatModel() { return settings.chatModel(); }
+                    @Override public float ttsRate() { return settings.ttsRate(); }
                 },
                 new StoryEngine.Emitter() {
                     @Override public void event(JSONObject ev) { bridge.emitEvent(ev); }
                     @Override public void state() { bridge.pushStateQuiet(); }
                 });
         bridge.attach(engine);
+        this.engine = engine;
 
         webView = new WebView(this);
         setContentView(webView);
@@ -125,6 +129,7 @@ public class MainActivity extends Activity implements ReverieBridge.Host {
 
     @Override
     protected void onDestroy() {
+        if (engine != null) engine.shutdown();   // 停 TTS，防泄漏
         webView.destroy();
         super.onDestroy();
     }

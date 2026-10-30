@@ -1,5 +1,6 @@
 package org.offblink.reverie.engine;
 
+import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -25,6 +26,13 @@ public class StoryEngine {
     public interface Emitter {
         void event(JSONObject ev);   // onEvent（已在 UI 线程投递由桥负责）
         void state();                // 请求推全量快照
+    }
+
+    public interface SettingsProvider {   // 解耦：引擎只要这几个值，不碰 Settings 类
+        String endpoint();
+        String apiKey();
+        String chatModel();
+        float ttsRate();
     }
 
     /** 主题风格块（SPEC §5.4） */
@@ -62,22 +70,84 @@ public class StoryEngine {
     private final StoryStore store;
     private final Emitter emitter;
     private final SettingsProvider settings;
+    private final TtsPlayer player;
 
     private Story story;
     private boolean busy = false;
     private Call inflight;               // 生成中可取消（换故事时）
-    private String lastSentence = "";    // 供 M3 TTS 接入：每句回调
+    private volatile boolean ttsDegraded = false;   // 快照里带给 JS（boot 晚到时补告）
 
-    public interface SettingsProvider {   // 解耦：引擎只要三个值，不碰 Settings 类
-        String endpoint();
-        String apiKey();
-        String chatModel();
-    }
-
-    public StoryEngine(StoryStore store, SettingsProvider settings, Emitter emitter) {
+    public StoryEngine(Context ctx, StoryStore store, SettingsProvider settings, Emitter emitter) {
         this.store = store;
         this.settings = settings;
         this.emitter = emitter;
+        this.player = new TtsPlayer(ctx, settings.ttsRate(), new TtsPlayer.Listener() {
+            @Override public void onSpeaking(int seg, String text) {
+                emitTts("speaking", seg, text);
+            }
+            @Override public void onSegmentRead(int seg) {
+                emitTts("idle", seg, null);   // 段读完 → JS 弹选项（SPEC §6 时序）
+            }
+            @Override public void onReplayDone(int lastSeg) {
+                emitTts("replay-done", lastSeg, null);
+            }
+            @Override public void onDegraded(String why) {
+                ttsDegraded = true;
+                emitTts("degraded", -1, why);
+            }
+        });
+        player.init();
+    }
+
+    /** 全量快照字段：TTS 是否已降级（JS boot 晚到时据此补 toast） */
+    public boolean ttsDegraded() { return ttsDegraded; }
+
+    /** 重听单段（SPEC §3.2 replaySegment） */
+    public synchronized boolean replaySegment(int index) {
+        if (story == null || busy) return false;
+        if (index < 0 || index >= story.segments.size()) return false;
+        Story.Segment seg = story.segments.get(index);
+        player.beginReplay(index);
+        for (String sent : splitSentences(seg.text)) player.replay(index, sent);
+        player.endReplay();
+        return true;
+    }
+
+    /** 重听全文：从 fromIndex 到最后（SPEC §3.2 replay） */
+    public synchronized boolean replay(Integer fromIndex) {
+        if (story == null || busy || story.segments.isEmpty()) return false;
+        int from = fromIndex == null ? 0 : Math.max(0, fromIndex);
+        if (from >= story.segments.size()) return false;
+        int last = story.segments.size() - 1;
+        player.beginReplay(last);
+        for (int i = from; i <= last; i++) {
+            for (String sent : splitSentences(story.segments.get(i).text)) player.replay(i, sent);
+        }
+        player.endReplay();
+        return true;
+    }
+
+    public void stopReplay() { player.stopReplay(); }
+
+    public void shutdown() { player.shutdown(); }
+
+    /** 按句末标点切句（重听入队粒度；与 LlmClient 流式切句同标点集） */
+    static List<String> splitSentences(String text) {
+        List<String> out = new ArrayList<>();
+        if (text == null || text.isEmpty()) return out;
+        StringBuilder cur = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            cur.append(c);
+            if ("。！？!?…".indexOf(c) >= 0) {
+                String s = cur.toString().trim();
+                if (!s.isEmpty()) out.add(s);
+                cur.setLength(0);
+            }
+        }
+        String tail = cur.toString().trim();
+        if (!tail.isEmpty()) out.add(tail);
+        return out;
     }
 
     public synchronized Story story() { return story; }
@@ -85,6 +155,7 @@ public class StoryEngine {
 
     /** 新故事：建档落盘，立即生成第 1 段。返回故事 id。 */
     public String newStory(final String themeId, final String tier) {
+        player.halt();               // 上一本还在念的话，先停
         final Story s = new Story();
         s.id = String.valueOf(System.currentTimeMillis());
         s.themeId = themeId;
@@ -104,6 +175,7 @@ public class StoryEngine {
         Story s = store.load(id);
         if (s == null) return false;
         if (inflight != null) { inflight.cancel(); }
+        player.halt();
         story = s;
         busy = false;
         emitter.state();
@@ -138,6 +210,7 @@ public class StoryEngine {
         if (busy || story == null) return false;
         Story.Segment last = story.last();
         if (last == null || last.isFinal || last.choice != -1 || idx < 0 || idx >= last.options.size()) return false;
+        player.stopReplay();   // 正在重听的话，选择即打断
         last.choice = idx;
         try { store.save(story); } catch (Exception ignored) { }
         emitChoiceMade(story.segments.size() - 1, idx, null);
@@ -188,8 +261,8 @@ public class StoryEngine {
         try {
             inflight = llm.stream(endpoint, apiKey, model, messages, new LlmClient.Listener() {
                 @Override public void onSentence(final String sentence) {
-                    lastSentence = sentence;
                     emitDelta(sentence);
+                    player.enqueue(nextIndex, sentence);   // 流式边生成边读（SPEC §6）
                 }
 
                 @Override public void onComplete(final LlmClient.Result res) {
@@ -207,12 +280,14 @@ public class StoryEngine {
                         busy = false;
                     }
                     emitDone(res);
+                    player.seal(nextIndex);   // 文本到齐；TTS 念完最后一句 → idle → JS 弹选项
                     emitter.state();
                     // 结局段后不再自动续（choose 只在 !isFinal 时可用）
                 }
 
                 @Override public void onError(final String msg) {
                     synchronized (StoryEngine.this) { busy = false; }
+                    player.abandon(nextIndex);   // 半截文不念出来
                     emitError("llm", msg);
                 }
             });
@@ -315,6 +390,22 @@ public class StoryEngine {
             ev.put("type", "error");
             ev.put("stage", stage);
             ev.put("msg", msg);
+            emitter.event(ev);
+        } catch (Exception ignored) { }
+    }
+
+    /**
+     * TTS 事件 → JS（tts-state）。
+     * state: speaking（句高亮）/ idle（段读完→弹选项）/ replay-done / degraded。
+     * 由 TtsPlayer 锁内回调触发——这里只构造 JSON + 经桥投递，不碰 player。
+     */
+    private void emitTts(String state, int index, String text) {
+        try {
+            JSONObject ev = new JSONObject();
+            ev.put("type", "tts-state");
+            ev.put("state", state);
+            ev.put("index", index);
+            if (text != null) ev.put("text", text);
             emitter.event(ev);
         } catch (Exception ignored) { }
     }

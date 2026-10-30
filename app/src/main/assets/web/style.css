@@ -123,6 +123,7 @@ button { font-family: inherit; color: inherit; background: none; border: 0; curs
 .story-flow { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px 30px; }
 .seg { font-size: 17px; line-height: 1.95; letter-spacing: .04em; margin: 0 0 22px; color: var(--ink); }
 .seg .cur { color: #FFFFFF; border-radius: 4px; background: rgba(139,140,240,.18); }
+.seg .sent { transition: background .15s var(--damped), color .15s var(--damped); }
 
 /* 底部选项坞（玻璃浮层） */
 .story-dock {

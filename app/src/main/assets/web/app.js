@@ -146,12 +146,46 @@
 
   /* ---------- 故事页渲染 ---------- */
   var storyFlow = $('story-flow'), storyDock = $('story-dock');
-  var curIdx = -1;   // 正在流式渲染的段
+  var curIdx = -1;              // 正在流式渲染的段
+  var pendingDock = null;       // segment-done 已到、等 tts idle 才弹 {index, options, isFinal}
+  var followMode = true;        // 跟读滚动：用户上滑离开底部即关，回底部再开
+  var degradedToastShown = false;
 
   function tierName(t) { return t === 'medium' ? '中' : t === 'long' ? '长' : '短'; }
 
-  /** 全量快照重建（打开/续听/结构变化） */
-  function renderStory(st) {
+  /** 与 Java splitSentences 同规则切句（高亮按句文本匹配，两边必须一致） */
+  function splitSents(t) {
+    var out = [], cur = '';
+    if (!t) return out;
+    for (var i = 0; i < t.length; i++) {
+      cur += t[i];
+      if ('。！？!?…'.indexOf(t[i]) >= 0) { var s = cur.trim(); if (s) out.push(s); cur = ''; }
+    }
+    var tail = cur.trim();
+    if (tail) out.push(tail);
+    return out;
+  }
+
+  function fillSpans(p, text) {
+    p.innerHTML = '';
+    splitSents(text).forEach(function (s) {
+      var sp = document.createElement('span');
+      sp.className = 'sent';
+      sp.textContent = s;
+      p.appendChild(sp);
+    });
+  }
+
+  /** 用户上滑离开底部 → 停止跟读；回底部恢复 */
+  storyFlow.addEventListener('scroll', function () {
+    var gap = storyFlow.scrollHeight - storyFlow.scrollTop - storyFlow.clientHeight;
+    followMode = gap < 60;
+  }, { passive: true });
+
+  /** 全量快照重建（打开/续听/结构变化）。
+      busy 必须从快照顶层传入——story 对象里没有 busy 字段，
+      在 story 上取 st.busy 恒为 undefined，空段快照会误弹重试坞（实测踩过）。 */
+  function renderStory(st, busy) {
     if (!st) return;
     $('story-p1').textContent = st.title || '未命名';
     $('story-p2').textContent = st.status === 'done'
@@ -161,18 +195,24 @@
     st.segments.forEach(function (seg) {
       var p = document.createElement('p');
       p.className = 'seg';
-      p.textContent = seg.text;
+      p.dataset.idx = seg.index;
+      fillSpans(p, seg.text);
       storyFlow.appendChild(p);
     });
     storyFlow.scrollTop = storyFlow.scrollHeight;
     // 空故事（首段生成失败留下的档）→ 给重试入口，别开成死页
     if (!st.segments.length) {
-      if (!st.busy) showRetry('还没有生成内容');
+      if (!busy) showRetry('还没有生成内容');
+      else storyDock.classList.remove('on');   // 正在生成首段：不弹任何坞
       return;
     }
-    // 未回答的选择点 → 弹选项坞（续听落点）
+    // 未回答的选择点 → 弹选项坞（续听落点）。
+    // 例外：pendingDock 命中最后一段 = 正在朗读中 → 显式清空 dock，读完才弹（SPEC §6）。
     var last = st.segments[st.segments.length - 1];
-    if (last && !st.busy && !last.isFinal && last.choice === -1 && last.options.length) {
+    var waitingRead = pendingDock && last && pendingDock.index === last.index;
+    if (waitingRead) {
+      storyDock.classList.remove('on');
+    } else if (last && !busy && !last.isFinal && last.choice === -1 && last.options.length) {
       showDock(last.options);
     } else {
       storyDock.classList.remove('on');
@@ -217,8 +257,33 @@
 
   /* ---------- 引擎事件 ---------- */
   Host.onState = function (st) {
-    if (st && st.story) renderStory(st.story);
+    if (st && st.story) renderStory(st.story, st.busy);
+    if (st && st.ttsDegraded && !degradedToastShown) {
+      degradedToastShown = true;
+      toast('这台设备没有中文语音引擎，已切换为纯文字模式');
+    }
   };
+
+  /** 高亮当前朗读句（按句文本定位——两边切句规则一致） */
+  function highlightSentence(segIdx, text) {
+    var p = storyFlow.querySelector('.seg[data-idx="' + segIdx + '"]');
+    if (!p) return;
+    var prev = p.querySelector('.sent.cur');
+    if (prev) prev.classList.remove('cur');
+    var spans = p.querySelectorAll('.sent');
+    for (var i = 0; i < spans.length; i++) {
+      if (spans[i].textContent === String(text).trim()) {
+        spans[i].classList.add('cur');
+        if (followMode) spans[i].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        return;
+      }
+    }
+  }
+
+  function clearHighlight() {
+    var prev = storyFlow.querySelector('.sent.cur');
+    if (prev) prev.classList.remove('cur');
+  }
 
   Host.onEvent = function (ev) {
     if (!ev) return;
@@ -233,8 +298,11 @@
         }
         var el = storyFlow.querySelector('.seg[data-idx="' + ev.index + '"]');
         if (el) {
-          el.textContent += (el.textContent ? ' ' : '') + ev.text;   // 句间原生停顿
-          storyFlow.scrollTop = storyFlow.scrollHeight;
+          var sp = document.createElement('span');
+          sp.className = 'sent';
+          sp.textContent = ev.text;
+          el.appendChild(sp);
+          if (followMode) storyFlow.scrollTop = storyFlow.scrollHeight;
         }
         $('story-p2').textContent = '正在编织第 ' + (ev.index + 1) + ' 段…';
         break;
@@ -242,28 +310,74 @@
       case 'segment-done': {
         curIdx = -1;
         var el2 = storyFlow.querySelector('.seg[data-idx="' + ev.index + '"]');
-        if (el2) { el2.textContent = ev.text; el2.removeAttribute('data-idx'); }
-        if (ev.isFinal) {
-          storyDock.classList.remove('on');
-          $('story-p2').textContent = '梦已完结';
-          toast('故事讲完了，晚安');
+        if (el2) fillSpans(el2, ev.text);   // 全文重建（切句与 TTS 对齐）
+        // 文本到齐≠可以选：等 TTS 念完该段（tts idle）才弹（SPEC §6）
+        pendingDock = { index: ev.index, options: ev.options, isFinal: ev.isFinal };
+        break;
+      }
+      case 'tts-state': {
+        if (ev.state === 'speaking') {
+          highlightSentence(ev.index, ev.text);
+        } else if (ev.state === 'idle') {
+          clearHighlight();
+          if (pendingDock && pendingDock.index === ev.index) {
+            var pd = pendingDock;
+            pendingDock = null;
+            if (pd.isFinal) {
+              storyDock.classList.remove('on');
+              $('story-p2').textContent = '梦已完结';
+              toast('故事讲完了，晚安');
+            } else {
+              showDock(pd.options);
+            }
+          }
+        } else if (ev.state === 'replay-done') {
+          clearHighlight();
+          replaying = false;
+          toast('重听结束');
+        } else if (ev.state === 'degraded') {
+          if (!degradedToastShown) {
+            degradedToastShown = true;
+            toast('这台设备没有中文语音引擎，已切换为纯文字模式');
+          }
+          // 降级后段读完事件仍会来（引擎按读完结算），pendingDock 照常消费
         }
-        // 非结局：M2 直接弹选项；M3 起改由 tts-state idle 触发
-        else showDock(ev.options);
         break;
       }
       case 'choice-made': {
+        pendingDock = null;
         $('story-p2').textContent = '继续…';
         break;
       }
       case 'story-done': break;
       case 'error': {
-        if (ev.stage === 'llm') showRetry(ev.msg);
+        if (ev.stage === 'llm') { pendingDock = null; showRetry(ev.msg); }
         else toast(ev.msg);
         break;
       }
     }
   };
+
+  /* ---------- 重听（M4，SPEC §3.2） ---------- */
+  var replaying = false;
+  $('replay-btn').addEventListener('click', function () {
+    if (replaying) {
+      replaying = false;
+      bridge('stopReplay');
+      clearHighlight();
+      toast('停止重听');
+      return;
+    }
+    var st = bridge('getState');
+    var story = st && st.story;
+    if (!story || !story.segments || !story.segments.length) { toast('还没有内容可重听'); return; }
+    // 活跃故事 → 重播当前段；已完结 → 从头重听全文
+    var r = story.status === 'done'
+      ? bridge('replay', {})
+      : bridge('replaySegment', { index: story.segments.length - 1 });
+    if (!r || !r.ok) { toast(st.busy ? '正在生成，稍后再试' : '暂不可重听'); return; }
+    replaying = true;
+  });
 
   /* ---------- 桥自检 ---------- */
   syncStart();
