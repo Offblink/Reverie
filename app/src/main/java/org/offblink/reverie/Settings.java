@@ -17,6 +17,8 @@ public class Settings {
     private static final String K_API_KEY = "apiKey";
     private static final String K_CHAT_MODEL = "chatModel";
     private static final String K_ASR_MODEL = "asrModel";
+    private static final String K_ASR_ENDPOINT = "asrEndpoint";
+    private static final String K_ASR_KEY = "asrApiKey";
     private static final String K_TTS_VOICE = "ttsVoice";
     private static final String K_TTS_RATE = "ttsRate";
     private static final String K_MIC_WINDOW = "micWindowSec";
@@ -39,6 +41,13 @@ public class Settings {
     public String apiKey() { return sp.getString(K_API_KEY, ""); }
     public String chatModel() { return sp.getString(K_CHAT_MODEL, DEF_CHAT_MODEL); }
     public String asrModel() { return sp.getString(K_ASR_MODEL, DEF_ASR_MODEL); }
+
+    /** ASR 独立端点：空 = 跟随 LLM endpoint（M6 拍板：MiMo 网关无 transcriptions） */
+    public String asrEndpoint() { return sp.getString(K_ASR_ENDPOINT, ""); }
+
+    /** ASR 独立 key：空 = 跟随 LLM apiKey */
+    public String asrApiKey() { return sp.getString(K_ASR_KEY, ""); }
+
     public String ttsVoice() { return sp.getString(K_TTS_VOICE, DEF_TTS_VOICE); }
     public float ttsRate() { return sp.getFloat(K_TTS_RATE, (float) DEF_TTS_RATE); }
     public int micWindowSec() { return sp.getInt(K_MIC_WINDOW, DEF_MIC_WINDOW_SEC); }
@@ -53,6 +62,12 @@ public class Settings {
         }
         if (patch.has("chatModel")) e.putString(K_CHAT_MODEL, patch.getString("chatModel"));
         if (patch.has("asrModel")) e.putString(K_ASR_MODEL, patch.getString("asrModel"));
+        // asrEndpoint 允许写空串（= 回落跟随 LLM）；asrApiKey 与主 apiKey 同口径：空 = 不改
+        if (patch.has("asrEndpoint")) e.putString(K_ASR_ENDPOINT, patch.optString("asrEndpoint", ""));
+        if (patch.has("asrApiKey")) {
+            String k = patch.optString("asrApiKey", "");
+            if (!k.isEmpty()) e.putString(K_ASR_KEY, k);
+        }
         if (patch.has("ttsVoice")) e.putString(K_TTS_VOICE, patch.optString("ttsVoice", ""));
         if (patch.has("ttsRate")) {
             double r = patch.optDouble("ttsRate", DEF_TTS_RATE);
@@ -72,6 +87,8 @@ public class Settings {
         o.put("hasKey", !apiKey().isEmpty());
         o.put("chatModel", chatModel());
         o.put("asrModel", asrModel());
+        o.put("asrEndpoint", asrEndpoint());
+        o.put("hasAsrKey", !asrApiKey().isEmpty());
         o.put("ttsVoice", ttsVoice());
         o.put("ttsRate", ttsRate());
         o.put("micWindowSec", micWindowSec());

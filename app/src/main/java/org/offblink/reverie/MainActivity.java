@@ -42,6 +42,8 @@ public class MainActivity extends Activity implements ReverieBridge.Host {
                     @Override public float ttsRate() { return settings.ttsRate(); }
                     @Override public String ttsVoice() { return settings.ttsVoice(); }
                     @Override public String asrModel() { return settings.asrModel(); }
+                    @Override public String asrEndpoint() { return settings.asrEndpoint(); }
+                    @Override public String asrApiKey() { return settings.asrApiKey(); }
                     @Override public int micWindowSec() { return settings.micWindowSec(); }
                 },
                 new StoryEngine.Emitter() {

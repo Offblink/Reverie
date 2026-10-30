@@ -10,7 +10,7 @@
 | 项目名 | **Reverie** |
 | TTS | **系统 TTS**（`android.speech.tts.TextToSpeech`），起步不接云 TTS |
 | LLM | **设置页自填 OpenAI 兼容配置**：baseURL / apiKey / chatModel，key 不进 git |
-| ASR | **whisper 云识别**（`/v1/audio/transcriptions`，与 LLM 同一 baseURL/key） |
+| ASR | **whisper 云识别**（`/v1/audio/transcriptions`）；默认与 LLM 同一 baseURL/key，设置页可**独立覆盖**（MiMo 等无 transcriptions 的网关的解法） |
 | 无响应行为 | **严格超时**：段末开麦一个窗口，超时关麦、选项仍可点；睡着 = 停在当前选择页，下次续听。**不做**哄睡自动选择 |
 | 设计 | **深色 Liquid Glass**（Mobile-Design 的 glass 组件移植）+ **Blinvo zoom-transition** 页间转场 |
 | 鬼故事 | **惊悚度不做应用侧限制**，按 LLM 提供方自身边界 |
@@ -120,7 +120,7 @@
 ```
 
 - 写盘时机：新档、每段生成完毕、每次选择。写入走临时文件 + rename（崩溃安全）。
-- 设置存 SharedPreferences：`endpoint / apiKey / chatModel / asrModel / ttsVoice / ttsRate / micWindowSec / keepScreenOn`。apiKey 只在原生域，**永不**经桥下发给 JS。
+- 设置存 SharedPreferences：`endpoint / apiKey / chatModel / asrModel / asrEndpoint / asrApiKey / ttsVoice / ttsRate / micWindowSec / keepScreenOn`。`asrEndpoint/asrApiKey` 留空 = 跟随 LLM 配置。apiKey 只在原生域，**永不**经桥下发给 JS。
 
 ## 5. LLM 契约
 
@@ -209,6 +209,7 @@ sequenceDiagram
 - 权限：`RECORD_AUDIO` 运行时申请；拒绝 → 仅点击模式。
 - **选项匹配（本地，零额外请求）**：① 序号词（一/二/三/第一/1/2/…）→ 下标；② 归一化（去「选/第/个/吧/。」）后与选项文本做包含/相似度，≥0.5 取最高；③ 未命中视为无效响应。
 - 录音参数：16 kHz / mono / 16-bit PCM，直接封装 WAV（不引 lame）。
+- 端点：whisper 走 `asrEndpoint/asrApiKey`（留空回落 LLM 的 endpoint/key）——LLM 用无 transcriptions 接口的网关（如 MiMo）时，给语音单独配一个 OpenAI 兼容端点即可。
 - whisper 失败（网络/余额）→ `asr-state{error}`，回落点击模式，不阻塞故事。
 
 ## 8. 设计规范

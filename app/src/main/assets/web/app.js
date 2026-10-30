@@ -168,6 +168,8 @@
     $('in-key').value = '';                 // key 永不回显
     $('in-chat').value = st.chatModel || '';
     $('in-asr').value = st.asrModel || '';
+    $('in-asr-endpoint').value = st.asrEndpoint || '';   // 独立 ASR 端点（M6）：空 = 跟随主端点
+    $('in-asr-key').value = '';                          // ASR 独立 key 同样不回显
     // 音色清单来自动态桥（TTS 未就绪时为空 → 提示）
     var vsel = $('in-voice');
     var voices = bridge('getVoices') || [];
@@ -193,12 +195,15 @@
       endpoint: $('in-endpoint').value.trim(),
       chatModel: $('in-chat').value.trim(),
       asrModel: $('in-asr').value.trim(),
+      asrEndpoint: $('in-asr-endpoint').value.trim(),   // 空 = 清掉=跟随主端点
       ttsVoice: $('in-voice').value,
       ttsRate: parseFloat($('in-rate').value) || 0.9,
       micWindowSec: parseInt($('in-mic').value, 10) || 10
     };
     var k = $('in-key').value.trim();
     if (k) patch.apiKey = k;               // 空 = 不改
+    var ak = $('in-asr-key').value.trim();
+    if (ak) patch.asrApiKey = ak;          // 空 = 不改（留空跟随主 KEY）
     var r = bridge('setSettings', patch);
     toast(r && r.ok ? '已保存' : '保存失败');
     loadSettings();

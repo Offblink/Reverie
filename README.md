@@ -21,9 +21,11 @@
 | API KEY | 只存本机，不进仓库 | `sk-…` |
 | CHAT MODEL | 对话模型 | `mimo-v2.6-flash` |
 | ASR MODEL | 语音选择用的 whisper 模型 | `whisper-1` |
+| ASR BASE URL | 语音识别独立端点，留空跟随主端点 | `https://api.openai.com/v1` |
+| ASR KEY | 语音识别独立 key，留空跟随主 KEY | `sk-…` |
 | 音色 / 语速 / 麦克风窗口 | 可选，均有默认值 | 0.9 / 10 秒 |
 
-> 语音选择与 LLM 共用同一端点的 `/audio/transcriptions`。端点不支持时自动回落纯点击，不影响听故事。
+> 语音选择默认与 LLM 共用端点的 `/audio/transcriptions`。网关不带该接口（如 MiMo）时，给语音单独配一个 OpenAI 兼容端点即可；仍不可用则自动回落纯点击，不影响听故事。
 
 ## 构建
 
