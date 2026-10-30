@@ -1,0 +1,14 @@
+[versions]
+agp = "9.3.3"
+junit = "4.13.2"
+okhttp = "4.12.0"
+# 单测里要真 org.json（mockable android.jar 的 JSONObject 不可用）——与 Spore 同款口径
+json = "20240303"
+
+[libraries]
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+json = { group = "org.json", name = "json", version.ref = "json" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }

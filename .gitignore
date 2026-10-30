@@ -1,0 +1,13 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+# 密钥红线：真实 apiKey 只存在手机 SharedPreferences，任何本地密钥文件也不进 git
+secrets.properties
+*.keystore
+*.jks

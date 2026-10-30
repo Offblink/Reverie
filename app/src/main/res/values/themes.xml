@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 无 appcompat/material 依赖，直接用平台深色主题；透明系统栏给 edge-to-edge（SPEC §8）。
+         WebView 内容自己留 safe-area，所以窗口层不做 fitsSystemWindows 消费。 -->
+    <style name="Theme.Reverie" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0B0B10</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
