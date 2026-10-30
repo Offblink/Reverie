@@ -86,8 +86,23 @@ public class ReverieBridge {
     public String setSettings(String patchJson) {
         try {
             settings.apply(new JSONObject(patchJson));
+            if (engine != null) engine.applyTtsSettings();   // 语速/音色即时生效（M6）
             return ok();
         } catch (JSONException e) {
+            return err(e);
+        }
+    }
+
+    /** TTS 音色清单（M6，SPEC §3.2）：TTS 未就绪时空表，设置页据此提示 */
+    @JavascriptInterface
+    public String getVoices() {
+        try {
+            JSONArray arr = new JSONArray();
+            if (engine != null) {
+                for (String v : engine.voices()) arr.put(v);
+            }
+            return arr.toString();
+        } catch (Exception e) {
             return err(e);
         }
     }

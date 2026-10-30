@@ -42,6 +42,14 @@
     back: function () { return false; }
   };
 
+  // Reduce Transparency → 不透明玻璃回退（glass.css 的 body.reduce-transparency）
+  // Android 13+/桌面 Chrome 支持该媒体特性时生效；不支持则维持常规玻璃。
+  try {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-transparency: reduce)').matches) {
+      document.body.classList.add('reduce-transparency');
+    }
+  } catch (e) { }
+
   // 桥健康自报（排错入口：adb logcat | grep reverie:boot）
   console.log(
     'reverie:boot Reverie=' + typeof window.Reverie +

@@ -89,11 +89,40 @@
   };
 
   /* ---------- 书架 ---------- */
+  var confirmEl = null;
+
+  /** 删除确认浮层（M6）：玻璃底抽屉式，after = 删除成功后的收尾（刷新列表） */
+  function askDelete(s, after) {
+    if (!confirmEl) {
+      confirmEl = document.createElement('div');
+      confirmEl.className = 'confirm-mask';
+      confirmEl.innerHTML = '<div class="confirm-panel glass"><div class="ct"></div>' +
+        '<div class="crow"><button class="cno">取消</button><button class="cdel">删除</button></div></div>';
+      document.body.appendChild(confirmEl);
+      confirmEl.querySelector('.cno').addEventListener('click', function () {
+        confirmEl.classList.remove('on');
+      });
+      confirmEl.addEventListener('click', function (e) {
+        if (e.target === confirmEl) confirmEl.classList.remove('on');   // 点遮罩取消
+      });
+    }
+    confirmEl.querySelector('.ct').textContent =
+      '删除《' + (s.title || '未命名') + '》？已听的和没写完的都会没掉。';
+    confirmEl.querySelector('.cdel').onclick = function () {
+      bridge('deleteStory', { id: s.id });
+      confirmEl.classList.remove('on');
+      toast('已删除');
+      after();
+    };
+    confirmEl.classList.add('on');
+  }
+
   function renderShelf() {
     var list = bridge('listStories') || [];
     var box = $('shelf-list');
     box.innerHTML = '';
     $('shelf-empty').hidden = list.length > 0;
+    $('shelf-hint').hidden = list.length === 0;
     $('shelf-count').textContent = list.length ? list.length + ' 个' : '';
     list.forEach(function (s) {
       var b = document.createElement('button');
@@ -101,7 +130,28 @@
       b.innerHTML = '<div class="row1"><span class="title">' + esc(s.title || '未命名') + '</span>' +
         '<span class="badge">' + (s.status === 'done' ? '已完结' : s.progress || '进行中') + '</span></div>' +
         '<div class="meta">' + esc(s.themeName || s.theme) + ' · ' + esc(s.tierName || s.tier) + '</div>';
+      // 长按 600ms → 删除确认；位移 >12px 视为滚动取消
+      var lpTimer = 0, lpFired = false, lpX = 0, lpY = 0;
+      b.addEventListener('pointerdown', function (e) {
+        lpFired = false;
+        lpX = e.clientX; lpY = e.clientY;
+        lpTimer = setTimeout(function () {
+          lpTimer = 0;
+          lpFired = true;
+          if (navigator.vibrate) navigator.vibrate(20);
+          askDelete(s, renderShelf);
+        }, 600);
+      });
+      b.addEventListener('pointermove', function (e) {
+        if (lpTimer && (Math.abs(e.clientX - lpX) > 12 || Math.abs(e.clientY - lpY) > 12)) {
+          clearTimeout(lpTimer);
+          lpTimer = 0;
+        }
+      });
+      b.addEventListener('pointerup', function () { clearTimeout(lpTimer); lpTimer = 0; });
+      b.addEventListener('pointercancel', function () { clearTimeout(lpTimer); lpTimer = 0; });
       b.addEventListener('click', function () {
+        if (lpFired) { lpFired = false; return; }   // 长按触发过删除 → 不再进打开
         var r = bridge('openStory', { id: s.id });
         if (!r) { toast('打开失败'); return; }
         V.shelf.classList.remove('on');
@@ -118,6 +168,21 @@
     $('in-key').value = '';                 // key 永不回显
     $('in-chat').value = st.chatModel || '';
     $('in-asr').value = st.asrModel || '';
+    // 音色清单来自动态桥（TTS 未就绪时为空 → 提示）
+    var vsel = $('in-voice');
+    var voices = bridge('getVoices') || [];
+    vsel.innerHTML = '';
+    var def = document.createElement('option');
+    def.value = '';
+    def.textContent = voices.length ? '默认（系统音色）' : '语音引擎未就绪';
+    vsel.appendChild(def);
+    voices.forEach(function (name) {
+      var o = document.createElement('option');
+      o.value = name;
+      o.textContent = name;
+      vsel.appendChild(o);
+    });
+    vsel.value = st.ttsVoice || '';
     $('in-rate').value = st.ttsRate != null ? Number(st.ttsRate).toFixed(1) : '0.9';
     $('in-mic').value = st.micWindowSec != null ? st.micWindowSec : '10';
     $('set-hint').textContent = st.hasKey ? '已配置 key' : '尚未配置 key';
@@ -128,6 +193,7 @@
       endpoint: $('in-endpoint').value.trim(),
       chatModel: $('in-chat').value.trim(),
       asrModel: $('in-asr').value.trim(),
+      ttsVoice: $('in-voice').value,
       ttsRate: parseFloat($('in-rate').value) || 0.9,
       micWindowSec: parseInt($('in-mic').value, 10) || 10
     };

@@ -17,6 +17,7 @@ public class Settings {
     private static final String K_API_KEY = "apiKey";
     private static final String K_CHAT_MODEL = "chatModel";
     private static final String K_ASR_MODEL = "asrModel";
+    private static final String K_TTS_VOICE = "ttsVoice";
     private static final String K_TTS_RATE = "ttsRate";
     private static final String K_MIC_WINDOW = "micWindowSec";
 
@@ -24,6 +25,7 @@ public class Settings {
     public static final String DEF_ENDPOINT = "https://api.openai.com/v1";
     public static final String DEF_CHAT_MODEL = "gpt-4o-mini";
     public static final String DEF_ASR_MODEL = "whisper-1";
+    public static final String DEF_TTS_VOICE = "";
     public static final double DEF_TTS_RATE = 0.9;
     public static final int DEF_MIC_WINDOW_SEC = 10;
 
@@ -37,6 +39,7 @@ public class Settings {
     public String apiKey() { return sp.getString(K_API_KEY, ""); }
     public String chatModel() { return sp.getString(K_CHAT_MODEL, DEF_CHAT_MODEL); }
     public String asrModel() { return sp.getString(K_ASR_MODEL, DEF_ASR_MODEL); }
+    public String ttsVoice() { return sp.getString(K_TTS_VOICE, DEF_TTS_VOICE); }
     public float ttsRate() { return sp.getFloat(K_TTS_RATE, (float) DEF_TTS_RATE); }
     public int micWindowSec() { return sp.getInt(K_MIC_WINDOW, DEF_MIC_WINDOW_SEC); }
 
@@ -50,6 +53,7 @@ public class Settings {
         }
         if (patch.has("chatModel")) e.putString(K_CHAT_MODEL, patch.getString("chatModel"));
         if (patch.has("asrModel")) e.putString(K_ASR_MODEL, patch.getString("asrModel"));
+        if (patch.has("ttsVoice")) e.putString(K_TTS_VOICE, patch.optString("ttsVoice", ""));
         if (patch.has("ttsRate")) {
             double r = patch.optDouble("ttsRate", DEF_TTS_RATE);
             e.putFloat(K_TTS_RATE, (float) Math.max(0.7, Math.min(1.1, r)));
@@ -68,6 +72,7 @@ public class Settings {
         o.put("hasKey", !apiKey().isEmpty());
         o.put("chatModel", chatModel());
         o.put("asrModel", asrModel());
+        o.put("ttsVoice", ttsVoice());
         o.put("ttsRate", ttsRate());
         o.put("micWindowSec", micWindowSec());
         return o;

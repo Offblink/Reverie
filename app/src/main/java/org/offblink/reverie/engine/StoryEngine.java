@@ -33,6 +33,7 @@ public class StoryEngine {
         String apiKey();
         String chatModel();
         float ttsRate();
+        String ttsVoice();
         String asrModel();
         int micWindowSec();
     }
@@ -104,10 +105,20 @@ public class StoryEngine {
             }
         });
         player.init();
+        player.setVoice(settings.ttsVoice());   // 启动前存过音色 → init 就绪后生效（M6）
     }
 
     /** 全量快照字段：TTS 是否已降级（JS boot 晚到时据此补 toast） */
     public boolean ttsDegraded() { return ttsDegraded; }
+
+    /** 设置变更后即时生效（M6）：语速 + 音色，无需重启朗读 */
+    public void applyTtsSettings() {
+        player.setRate(settings.ttsRate());
+        player.setVoice(settings.ttsVoice());
+    }
+
+    /** TTS 音色清单（设置页用；引擎未就绪时空表） */
+    public java.util.List<String> voices() { return player.voices(); }
 
     /** 重听单段（SPEC §3.2 replaySegment） */
     public synchronized boolean replaySegment(int index) {

@@ -40,6 +40,7 @@ public class MainActivity extends Activity implements ReverieBridge.Host {
                     @Override public String apiKey() { return settings.apiKey(); }
                     @Override public String chatModel() { return settings.chatModel(); }
                     @Override public float ttsRate() { return settings.ttsRate(); }
+                    @Override public String ttsVoice() { return settings.ttsVoice(); }
                     @Override public String asrModel() { return settings.asrModel(); }
                     @Override public int micWindowSec() { return settings.micWindowSec(); }
                 },

@@ -66,7 +66,8 @@
 | `openStory` | `{id}` | `{ok}` |
 | `deleteStory` | `{id}` | `{ok}` |
 | `getSettings` | — | 设置对象（**不含 apiKey**，仅 `hasKey:bool`） |
-| `setSettings` | `{...}` | `{ok}` |
+| `setSettings` | `{...}` | `{ok}`（语速/音色即时生效，无需重启朗读） |
+| `getVoices` | — | `[name,…]` TTS 音色清单（zh 优先；TTS 未就绪为空表） |
 | `testEndpoint` | — | `{ok, latencyMs, msg}` 连通性探测 |
 | `startAsr` / `stopAsr` | — | `{ok}` / `{ok, needPermission}`（无 RECORD_AUDIO 时先弹系统授权） |
 

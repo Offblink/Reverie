@@ -48,6 +48,7 @@
       </div>
       <button class="icon-btn" data-back aria-label="返回">✕</button>
     </div>
+    <p class="tiny shelf-hint" id="shelf-hint" hidden>长按卡片可删除</p>
     <div class="shelf-list" id="shelf-list"></div>
     <div class="shelf-empty" id="shelf-empty" hidden>还没有故事，从主页开始一个吧</div>
   </section>
@@ -91,6 +92,8 @@
 
     <div class="sec-label">播 报</div>
     <div class="set-group glass">
+      <label class="set-row"><div class="lab">音 系（系统 TTS 音色）</div>
+        <select id="in-voice"><option value="">默认</option></select></label>
       <label class="set-row"><div class="lab">语速（0.7–1.1，睡前 0.9）</div>
         <input id="in-rate" placeholder="0.9" autocomplete="off"></label>
       <label class="set-row"><div class="lab">麦克风窗口（秒）</div>

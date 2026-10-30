@@ -66,6 +66,7 @@ public final class TtsPlayer extends UtteranceProgressListener
     private final Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
     private volatile float rate;
+    private String voiceName = "";   // 音色（M6）；空 = 系统默认
 
     private TextToSpeech tts;
     private int st = ST_INIT;
@@ -125,6 +126,45 @@ public final class TtsPlayer extends UtteranceProgressListener
     public void setRate(float r) {
         rate = r;
         synchronized (this) { if (st == ST_OK && tts != null) tts.setSpeechRate(r); }
+    }
+
+    /** 音色切换（M6）：存名待用；TTS 已就绪立即切。找不到该名保持当前音色。 */
+    public synchronized void setVoice(String name) {
+        voiceName = name == null ? "" : name;
+        applyVoiceLocked();
+    }
+
+    /** 音色清单（设置页用）：init 就绪前返回空表；中文音色排前 */
+    public synchronized List<String> voices() {
+        List<String> out = new ArrayList<>();
+        if (st != ST_OK || tts == null) return out;
+        try {
+            List<Voice> vs = new ArrayList<>(tts.getVoices());
+            java.util.Collections.sort(vs, (a, b) -> Boolean.compare(!isZh(a), !isZh(b)));
+            for (Voice v : vs) out.add(v.getName());
+        } catch (Exception e) {
+            Log.w(TAG, "getVoices failed: " + e);
+        }
+        return out;
+    }
+
+    private void applyVoiceLocked() {
+        if (st != ST_OK || tts == null || voiceName.isEmpty()) return;
+        try {
+            Set<Voice> vs = tts.getVoices();
+            if (vs == null) return;
+            for (Voice v : vs) {
+                if (voiceName.equals(v.getName())) { tts.setVoice(v); return; }
+            }
+            Log.w(TAG, "voice not found: " + voiceName);
+        } catch (Exception e) {
+            Log.w(TAG, "setVoice failed: " + e);
+        }
+    }
+
+    private static boolean isZh(Voice v) {
+        Locale l = v.getLocale();
+        return l != null && "zh".equals(l.getLanguage());
     }
 
     /* ================= 生成段管道（g*） ================= */
@@ -347,6 +387,7 @@ public final class TtsPlayer extends UtteranceProgressListener
             if (!zh && lang != TextToSpeech.LANG_AVAILABLE) { degradeLocked("no zh voice"); return; }
             Log.i(TAG, "ready lang=" + lang + " zhVoices=" + zh);
             st = ST_OK;
+            applyVoiceLocked();   // 启动前存的音色此刻生效
             pumpLocked();
         }
     }
