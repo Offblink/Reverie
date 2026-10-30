@@ -33,6 +33,8 @@ public class StoryEngine {
         String apiKey();
         String chatModel();
         float ttsRate();
+        String asrModel();
+        int micWindowSec();
     }
 
     /** 主题风格块（SPEC §5.4） */
@@ -67,6 +69,8 @@ public class StoryEngine {
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final LlmClient llm = new LlmClient();
+    private final AsrRecorder recorder;
+    private final WhisperClient whisper = new WhisperClient();
     private final StoryStore store;
     private final Emitter emitter;
     private final SettingsProvider settings;
@@ -76,11 +80,14 @@ public class StoryEngine {
     private boolean busy = false;
     private Call inflight;               // 生成中可取消（换故事时）
     private volatile boolean ttsDegraded = false;   // 快照里带给 JS（boot 晚到时补告）
+    private boolean asrActive = false;               // 麦克风窗口进行中（exec 线程触发，synchronized 保护）
+    private volatile boolean foreground = true;     // 后台不录音（SPEC §6）
 
     public StoryEngine(Context ctx, StoryStore store, SettingsProvider settings, Emitter emitter) {
         this.store = store;
         this.settings = settings;
         this.emitter = emitter;
+        this.recorder = new AsrRecorder(ctx);
         this.player = new TtsPlayer(ctx, settings.ttsRate(), new TtsPlayer.Listener() {
             @Override public void onSpeaking(int seg, String text) {
                 emitTts("speaking", seg, text);
@@ -129,7 +136,7 @@ public class StoryEngine {
 
     public void stopReplay() { player.stopReplay(); }
 
-    public void shutdown() { player.shutdown(); }
+    public void shutdown() { stopAsr(); player.shutdown(); }
 
     /** 按句末标点切句（重听入队粒度；与 LlmClient 流式切句同标点集） */
     static List<String> splitSentences(String text) {
@@ -155,7 +162,8 @@ public class StoryEngine {
 
     /** 新故事：建档落盘，立即生成第 1 段。返回故事 id。 */
     public String newStory(final String themeId, final String tier) {
-        player.halt();               // 上一本还在念的话，先停
+        stopAsr();                // 上一本还在开麦/在念的话，先停
+        player.halt();
         final Story s = new Story();
         s.id = String.valueOf(System.currentTimeMillis());
         s.themeId = themeId;
@@ -175,6 +183,7 @@ public class StoryEngine {
         Story s = store.load(id);
         if (s == null) return false;
         if (inflight != null) { inflight.cancel(); }
+        stopAsr();
         player.halt();
         story = s;
         busy = false;
@@ -211,6 +220,7 @@ public class StoryEngine {
         Story.Segment last = story.last();
         if (last == null || last.isFinal || last.choice != -1 || idx < 0 || idx >= last.options.size()) return false;
         player.stopReplay();   // 正在重听的话，选择即打断
+        stopAsr();             // 选择已下（点击或语音）→ 关麦
         last.choice = idx;
         try { store.save(story); } catch (Exception ignored) { }
         emitChoiceMade(story.segments.size() - 1, idx, null);
@@ -228,6 +238,92 @@ public class StoryEngine {
             return true;
         }
         return false;
+    }
+
+    /* ---------- ASR（M5，SPEC §7） ---------- */
+
+    public void setForeground(boolean fg) {
+        foreground = fg;
+        if (!fg) stopAsr();   // 退后台即关麦（录音需前台，SPEC §6）
+    }
+
+    /**
+     * 开麦：由 JS 在弹选项坞时触发（单一触发点——重听/补报的 tts idle
+     * 不弹坞也就不会误开麦）。守卫：有故事、非 busy、落点未回答、前台、没在录。
+     */
+    public synchronized boolean startAsr() {
+        if (!foreground || story == null || busy) return false;
+        Story.Segment last = story.last();
+        if (last == null || last.isFinal || last.choice != -1) return false;
+        if (asrActive) return true;
+        final int idx = last.index;
+        final int win = settings.micWindowSec();
+        asrActive = true;
+        boolean started = recorder.start(win, new AsrRecorder.Listener() {
+            @Override public void onAudio(byte[] wav) { exec.execute(() -> transcribe(idx, wav)); }
+            @Override public void onTimeout() { exec.execute(() -> asrEnded("timeout", idx, null, null, null)); }
+            @Override public void onError(String msg) { exec.execute(() -> asrEnded("error", idx, null, null, msg)); }
+        });
+        if (!started) { asrActive = false; return false; }
+        emitAsr("listening", idx, null, null, win, null);
+        return true;
+    }
+
+    /** 手动关麦：丢弃当前录音，无事件（JS 自己清倒计时环） */
+    public synchronized void stopAsr() {
+        asrActive = false;
+        recorder.stop();
+    }
+
+    /** 检出语音 → 上传 whisper（回调在 OkHttp 线程，回 exec 处理结果） */
+    private synchronized void transcribe(int idx, byte[] wav) {
+        if (!asrActive) return;
+        whisper.transcribe(settings.endpoint(), settings.apiKey(), settings.asrModel(), wav,
+                new WhisperClient.Listener() {
+                    @Override public void onText(String text) { exec.execute(() -> handleHeard(idx, text)); }
+                    @Override public void onError(String msg) { exec.execute(() -> asrEnded("error", idx, null, null, msg)); }
+                });
+    }
+
+    /** 识别文本 → 本地匹配 → 命中续写 / 未命中回落点击 */
+    private void handleHeard(int idx, String text) {
+        String heard = (text == null || text.isEmpty()) ? null : text;
+        int choice = -1;
+        synchronized (this) {
+            if (!asrActive) return;
+            asrActive = false;
+            if (heard != null && story != null) {
+                Story.Segment last = story.last();
+                if (last != null && last.index == idx) choice = OptionMatcher.match(heard, last.options);
+            }
+        }
+        if (heard == null) { emitAsr("timeout", idx, null, null, null, null); return; }
+        if (choice >= 0) {
+            emitAsr("matched", idx, heard, choice, null, null);
+            chooseHeard(choice, heard);
+        } else {
+            emitAsr("timeout", idx, heard, null, null, null);   // 未命中 = 无效响应（SPEC §7）
+        }
+    }
+
+    private synchronized void asrEnded(String state, int idx, String heard, Integer choice, String msg) {
+        asrActive = false;
+        emitAsr(state, idx, heard, choice, null, msg);
+    }
+
+    /** 麦克风状态机事件（SPEC §3.2 asr-state） */
+    private void emitAsr(String state, int index, String heard, Integer choice, Integer windowSec, String msg) {
+        try {
+            JSONObject ev = new JSONObject();
+            ev.put("type", "asr-state");
+            ev.put("state", state);
+            ev.put("index", index);
+            if (heard != null) ev.put("heard", heard);
+            if (choice != null) ev.put("choiceIndex", choice);
+            if (windowSec != null) ev.put("windowSec", windowSec);
+            if (msg != null) ev.put("msg", msg);
+            emitter.event(ev);
+        } catch (Exception ignored) { }
     }
 
     /** 重试当前段（error 后） */

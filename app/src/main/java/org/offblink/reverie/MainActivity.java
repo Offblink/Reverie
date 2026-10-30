@@ -29,9 +29,9 @@ public class MainActivity extends Activity implements ReverieBridge.Host {
         super.onCreate(savedInstanceState);
 
         Settings settings = new Settings(this);
-        bridge = new ReverieBridge(settings, this);
+        bridge = new ReverieBridge(settings, this, this);
 
-        // 故事引擎（M2）+ TTS 播放器（M4）：事件经桥推 JS；快照变化桥主动推
+        // 故事引擎（M2）+ TTS 播放器（M4）+ ASR（M5）：事件经桥推 JS；快照变化桥主动推
         StoryEngine engine = new StoryEngine(
                 this,
                 new StoryStore(this),
@@ -40,6 +40,8 @@ public class MainActivity extends Activity implements ReverieBridge.Host {
                     @Override public String apiKey() { return settings.apiKey(); }
                     @Override public String chatModel() { return settings.chatModel(); }
                     @Override public float ttsRate() { return settings.ttsRate(); }
+                    @Override public String asrModel() { return settings.asrModel(); }
+                    @Override public int micWindowSec() { return settings.micWindowSec(); }
                 },
                 new StoryEngine.Emitter() {
                     @Override public void event(JSONObject ev) { bridge.emitEvent(ev); }
@@ -111,6 +113,27 @@ public class MainActivity extends Activity implements ReverieBridge.Host {
     @Override
     public void onBackPressed() {
         handleBack();
+    }
+
+    /** 前后台跟踪：退后台即关麦（录音需前台，SPEC §6） */
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (engine != null) engine.setForeground(true);
+    }
+
+    @Override
+    protected void onStop() {
+        if (engine != null) engine.setForeground(false);
+        super.onStop();
+    }
+
+    /** RECORD_AUDIO 授权结果 → 桥续上挂起的开麦 / 发 error 事件 */
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        if (code != ReverieBridge.REQ_MIC) return;
+        bridge.onMicPermission(results.length > 0
+                && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED);
     }
 
     /* ---------- ReverieBridge.Host：原生 → JS ---------- */

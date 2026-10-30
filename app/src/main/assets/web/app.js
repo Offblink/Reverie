@@ -69,7 +69,7 @@
   [].forEach.call(document.querySelectorAll('[data-back]'), function (b) {
     b.addEventListener('click', function () {
       var page = b.closest('.vpage');
-      if (page === V.story) { if (Zoom.depth() > 1) Zoom.back(); }
+      if (page === V.story) { micAbort(); if (Zoom.depth() > 1) Zoom.back(); }
       else page.classList.remove('on');
     });
   });
@@ -81,7 +81,7 @@
     if (V.story.classList.contains('on')) {
       var ok = Zoom.depth() > 1;
       console.log('reverie:back story-on depth=' + Zoom.depth() + ' consume=' + ok);
-      if (ok) Zoom.back();
+      if (ok) { micAbort(); Zoom.back(); }
       return ok;
     }
     console.log('reverie:back no-overlay-page');
@@ -234,6 +234,7 @@
     });
     storyDock.classList.add('on');
     storyFlow.scrollTop = storyFlow.scrollHeight;
+    bridge('startAsr');   // 选项就位 → 自动开麦（SPEC §7；原生守卫前台/busy/已答）
   }
 
   function showRetry(msg) {
@@ -346,7 +347,23 @@
       }
       case 'choice-made': {
         pendingDock = null;
+        asrRingStop();
         $('story-p2').textContent = '继续…';
+        break;
+      }
+      case 'asr-state': {
+        if (ev.state === 'listening') {
+          asrRingStart(ev.windowSec || 10);
+        } else {
+          asrRingStop();
+          if (ev.state === 'timeout') {
+            toast(ev.heard ? '听到「' + ev.heard + '」但没对上选项 —— 点一下吧'
+                           : '没听到选择，选项还在等着');
+          } else if (ev.state === 'error') {
+            toast(ev.msg || '语音识别失败，可点击选择');
+          }
+          // matched：choice-made 紧随其后，UI 交给它
+        }
         break;
       }
       case 'story-done': break;
@@ -377,6 +394,45 @@
       : bridge('replaySegment', { index: story.segments.length - 1 });
     if (!r || !r.ok) { toast(st.busy ? '正在生成，稍后再试' : '暂不可重听'); return; }
     replaying = true;
+  });
+
+  /* ---------- 麦克风（M5，SPEC §7） ---------- */
+  var micBtn = $('mic-btn');
+  var asr = { live: false, timer: 0, endsAt: 0, dur: 0 };
+
+  function ringSet(pct) { micBtn.style.setProperty('--p', Math.max(0, Math.min(100, pct))); }
+
+  function asrRingStart(sec) {
+    asr.live = true;
+    asr.dur = sec;
+    asr.endsAt = Date.now() + sec * 1000;
+    micBtn.classList.add('live');
+    clearInterval(asr.timer);
+    asr.timer = setInterval(function () {
+      ringSet((asr.endsAt - Date.now()) / (asr.dur * 1000) * 100);
+      if (Date.now() >= asr.endsAt) asrRingStop();   // 原生 VAD 是真值，这里只是视觉对齐
+    }, 200);
+  }
+
+  function asrRingStop() {
+    asr.live = false;
+    clearInterval(asr.timer);
+    micBtn.classList.remove('live');
+    ringSet(0);
+  }
+
+  /** 离开故事页：关麦（原生也会在退后台/换故事时兜底关） */
+  function micAbort() {
+    if (asr.live) { bridge('stopAsr'); asrRingStop(); }
+  }
+
+  micBtn.addEventListener('click', function () {
+    if (asr.live) { micAbort(); return; }
+    var r = bridge('startAsr');
+    if (!r) { toast('语音选择暂不可用'); return; }
+    if (r.needPermission) return;   // 系统授权弹窗中；授权后 listening 事件亮环
+    if (!r.ok) { toast('现在还不能录音'); return; }
+    // ok=true 但 listening 事件稍后到，环由事件点亮
   });
 
   /* ---------- 桥自检 ---------- */

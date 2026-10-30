@@ -43,9 +43,9 @@
 | 原生 | `engine/LlmClient` | OkHttp SSE 流式 chat/completions |
 | 原生 | `engine/StoryEngine` | 状态机：生成→TTS→开麦→选择→生成…；编排者 |
 | 原生 | `engine/Story` + `StoryStore` | 数据模型 + `filesDir/stories/<id>.json` |
-| 原生 | `tts/TtsPlayer` | 系统 TTS，逐句入队，UtteranceProgressCallbacks |
-| 原生 | `asr/AsrRecorder` + `WhisperClient` | AudioRecord 16k 单声道 PCM→WAV，VAD 截断，上传 whisper |
-| 原生 | `settings/Settings` | SharedPreferences：endpoint/key/model/音色/语速/麦克风窗口 |
+| 原生 | `engine/TtsPlayer` | 系统 TTS，逐句入队，UtteranceProgressCallbacks |
+| 原生 | `engine/AsrRecorder` + `engine/WhisperClient` | AudioRecord 16k 单声道 PCM→WAV，VAD 截断，上传 whisper |
+| 原生 | `Settings` | SharedPreferences：endpoint/key/model/音色/语速/麦克风窗口 |
 | WebView | `assets/web/` | **全部可见 UI**：主页 / 书架 / 故事页 / 设置页，深色玻璃视觉 |
 
 原则：原生是引擎（生成、播音、录音、持久化），web 是皮（渲染、输入、转场）。web 重载后主动 `getState` 拉全量快照即可恢复画面。
@@ -68,7 +68,7 @@
 | `getSettings` | — | 设置对象（**不含 apiKey**，仅 `hasKey:bool`） |
 | `setSettings` | `{...}` | `{ok}` |
 | `testEndpoint` | — | `{ok, latencyMs, msg}` 连通性探测 |
-| `startAsr` / `stopAsr` | — | `{ok}` 手动重开麦 / 关麦 |
+| `startAsr` / `stopAsr` | — | `{ok}` / `{ok, needPermission}`（无 RECORD_AUDIO 时先弹系统授权） |
 
 **原生 → JS** `Host.onEvent(ev)`：
 
@@ -78,7 +78,7 @@
 | `segment-done` | `{index, text, options, isFinal}` | 一段生成完毕（未朗读） |
 | `tts-state` | `{state: playing\|idle, index}` | TTS 开始/结束一段 |
 | `choice-made` | `{index, choiceIndex, heard?}` | 选择已记录（点击或语音） |
-| `asr-state` | `{state: listening\|matched\|timeout\|error, index?, heard?, choiceIndex?}` | 麦克风状态机 |
+| `asr-state` | `{state: listening\|matched\|timeout\|error, index?, heard?, choiceIndex?, windowSec?, msg?}` | 麦克风状态机（listening 带窗口秒数供倒计时环；未命中走 timeout+heard；error 带 msg） |
 | `story-done` | `{id}` | 结局段朗读完 |
 | `error` | `{stage: llm\|tts\|asr, msg}` | 任一环节失败 |
 
@@ -230,10 +230,10 @@ sequenceDiagram
 |---|---|---|
 | M0 | Gradle 脚手架、Manifest、空 MainActivity | `assembleDebug` 过，装机出空壳页 |
 | M1 | WebView 壳 + 桥 + 四视图静态页 + glass 视觉 + zoom 转场 | 真机/模拟器可导航，桥自检日志过 |
-| M2 | StoryEngine + LlmClient + StoryStore（无 TTS/ASR） | 选主题→流式生成→点击选择→到结局→落盘可重开 |
-| M3 | TTS 逐句朗读 + 句高亮 + 段末开麦触发 | 短故事全程听读，断点续听、重听 |
-| M4 | ASR：录音/VAD/whisper/匹配 + 倒计时环 | 语音选择闭环，超时关麦回落点击 |
-| M5 | 书架 + 设置页 + 错误重试 + 边角打磨 | 三挡各跑通一遍，60min 无崩溃 |
+| M2 | StoryEngine + LlmClient + StoryStore + 文字版闭环（原 M3 文字版验收并入） | 选主题→流式生成→点击选择→到结局→落盘可重开 |
+| M4 | TTS 逐句朗读 + 句高亮 + 读完才弹选项 + 重听 | 短故事全程听读，断点续听、重听 |
+| M5 | ASR：录音/VAD/whisper/匹配 + 倒计时环 + 运行时权限 | 语音选择闭环，超时关麦回落点击（语音命中链路需真机复验，模拟器无音频输入） |
+| M6 | 书架删除手势 + 设置音色/语速 + 边角打磨 | 三挡各跑通一遍，60min 无崩溃 |
 
 每增量收尾：`assembleDebug` + 该增量直接触及路径的冒烟；UI 改动真机截图验收。
 

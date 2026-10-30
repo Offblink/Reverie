@@ -165,3 +165,18 @@ button { font-family: inherit; color: inherit; background: none; border: 0; curs
   transition: transform var(--spring);
 }
 .set-test:active { transform: scale(.96); }
+
+/* ============================================================
+   麦克风倒计时环（M5）
+   conic 渐变环带：--p（0–100）由 app.js 每 200ms 刷新；静默时整环隐藏。
+   ============================================================ */
+#mic-btn { position: relative; }
+#mic-btn::before {
+  content: ''; position: absolute; inset: -3px; border-radius: 50%;
+  background: conic-gradient(var(--accent) calc(var(--p, 0) * 1%), rgba(255,255,255,.10) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  opacity: 0; transition: opacity .15s var(--damped);
+}
+#mic-btn.live::before { opacity: 1; }
+#mic-btn.live { color: var(--accent); }
