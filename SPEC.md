@@ -1,7 +1,7 @@
 # Reverie — 睡前互动故事 App · 技术规格
 
 > Android 原生壳 + WebView 全 UI。LLM 现编故事 → 系统 TTS 讲读 → 段末弹选项（点击 / 语音）→ LLM 续写。
-> 仓库：`Offblink/Reverie-Mobile` · 本地：`Desktop/Vibe Coding/useful/Reverie-Mobile`
+> 仓库：`Offblink/Reverie` · 本地：`Desktop/Vibe Coding/useful/Reverie`
 
 ## 1. 已确认决策（2026-10-30 用户拍板）
 
