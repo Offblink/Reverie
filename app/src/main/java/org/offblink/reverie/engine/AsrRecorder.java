@@ -33,16 +33,18 @@ public final class AsrRecorder {
     private static final String TAG = "reverie-asr";
     private static final int SAMPLE_RATE = 16000;
     private static final long SILENCE_STOP_MS = 1200;   // 连续静音 1.2s 截断
-    private static final int RMS_ABS_FLOOR = 700;       // 绝对噪声门（全静音房间不误触）
-    private static final float NOISE_MULT = 3.0f;       // 语音判定：噪声底 × 3
-    private static final float NOISE_EMA = 0.05f;       // 噪声底更新步长
+    private static final int RMS_ABS_FLOOR = 500;       // 绝对噪声门（全静音房间不误触；M9 700→500：睡前轻声）
+    private static final float NOISE_MULT = 2.6f;       // 语音判定：噪声底 × 2.6（M9 3.0→2.6：轻声检出）
+    private static final float NOISE_EMA = 0.15f;       // 噪声底更新步长（M9 0.05→0.15：初值 1200 的高阈值
+                                                        //  要 2s 才衰减到真实底噪，开麦头 2s 轻声必漏——0.15 约 0.4s 收敛。
+                                                        //  仍安全：EMA 只在 rms<噪声×3 的静音块更新，语音不会拉高噪声底）
     private static final int CHUNK_SAMPLES = 1600;      // 100ms 一块
     private static final int PREROLL_CHUNKS = 3;        // 前导 300ms，防吃字头
 
     public interface Listener {
-        void onAudio(byte[] wav);   // 检出语音：WAV 就绪
-        void onTimeout();           // 窗口内没听到话
-        void onError(String msg);   // 权限/设备故障
+        void onAudio(byte[] wav);        // 检出语音：WAV 就绪
+        void onTimeout(int peakRms);     // 窗口内没听到话；带峰值音量供诊断（M9）
+        void onError(String msg);        // 权限/设备故障
     }
 
     private final Context appCtx;
@@ -95,7 +97,8 @@ public final class AsrRecorder {
             ArrayDeque<byte[]> preroll = new ArrayDeque<>();
             boolean speaking = false;
             long lastLoudAt = 0;
-            double noise = 1200.0;   // 噪声底初值：桌面环境常见底噪
+            long peakRms = 0;        // 窗口内最大音量（M9 诊断：超时 toast 据此区分"没出声"vs"没过阈"）
+            double noise = 1200.0;   // 噪声底初值：桌面环境常见底噪（EMA 0.15 约 0.4s 收敛到真实底噪）
 
             while (running) {
                 int n = rec.read(buf, 0, buf.length);
@@ -108,15 +111,18 @@ public final class AsrRecorder {
                     preroll.addLast(pcm);
                     if (preroll.size() > PREROLL_CHUNKS) preroll.removeFirst();
                     if (rms < noise * NOISE_MULT) noise = noise * (1 - NOISE_EMA) + rms * NOISE_EMA;
+                    if (rms > peakRms) peakRms = rms;
                     if (rms > Math.max(RMS_ABS_FLOOR, noise * NOISE_MULT)) {
                         speaking = true;
                         for (byte[] p : preroll) cap.write(p);
                         cap.write(pcm);
                         lastLoudAt = now;
-                        Log.i(TAG, "speech start rms=" + rms + " noise=" + (long) noise);
+                        Log.i(TAG, "speech start rms=" + rms + " noise=" + (long) noise
+                                + " thr=" + (long) Math.max(RMS_ABS_FLOOR, noise * NOISE_MULT));
                     } else if (now - t0 >= windowMs) {
-                        Log.i(TAG, "window timeout (no speech, " + windowSec + "s)");
-                        l.onTimeout();
+                        Log.i(TAG, "window timeout (no speech, " + windowSec + "s) peakRms="
+                                + peakRms + " noise=" + (long) noise);
+                        l.onTimeout((int) peakRms);
                         return;
                     }
                 } else {

@@ -53,4 +53,28 @@ public class StoryEngineMessagesTest {
         Story s = story("third");
         assertTrue(systemOf(s).contains("第三人称"));
     }
+
+    @Test
+    public void optionsPromptReadsNumberedChoices() {
+        // M9：选项也要读——「请选择。一，推开门。二，离开。」
+        java.util.List<String> opts = java.util.Arrays.asList("推开门看看", "转身离开");
+        assertTrue(StoryEngine.optionsPrompt(opts)
+                .equals("请选择。一，推开门看看。二，转身离开。"));
+    }
+
+    @Test
+    public void optionsPromptEmptyAndDegenerate() {
+        assertTrue(StoryEngine.optionsPrompt(null).isEmpty());
+        assertTrue(StoryEngine.optionsPrompt(java.util.Collections.emptyList()).isEmpty());
+        // 全空串选项 → 视为无选项
+        assertTrue(StoryEngine.optionsPrompt(java.util.Arrays.asList("  ", "")).isEmpty());
+    }
+
+    @Test
+    public void optionsPromptCapsAtFive() {
+        java.util.List<String> five = java.util.Arrays.asList("a", "b", "c", "d", "e", "f", "g");
+        String p = StoryEngine.optionsPrompt(five);
+        assertTrue(p.contains("五，e。"));
+        assertTrue(!p.contains("f"));
+    }
 }

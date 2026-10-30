@@ -220,13 +220,25 @@ button { font-family: inherit; color: inherit; background: none; border: 0; curs
   -webkit-overflow-scrolling: touch;
 }
 .pick-item {
-  width: 100%; text-align: left; padding: 12px 14px; border-radius: 13px;
-  font-size: 14px; color: var(--ink2); display: flex; justify-content: space-between;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px 6px 14px; border-radius: 13px;
   transition: background var(--damped);
 }
 .pick-item:active { background: rgba(255,255,255,.05); }
-.pick-item.sel { color: var(--accent); font-weight: 700; background: var(--accent-dim); }
-.pick-item .tick { font-weight: 700; }
+.pick-item.sel { background: var(--accent-dim); }
+.pick-main {
+  flex: 1; padding: 8px 0; text-align: left;
+  font-size: 14px; color: var(--ink2);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.pick-item.sel .pick-main { color: var(--accent); font-weight: 700; }
+.pick-main .tick { font-weight: 700; }
+.pick-try {
+  flex: none; padding: 6px 14px; border-radius: 999px;
+  border: .5px solid var(--glass-border); font-size: 12px; color: var(--ink2);
+  transition: background var(--damped);
+}
+.pick-try:active { background: rgba(255,255,255,.06); color: var(--ink); }
 
 .confirm-mask {
   position: fixed; inset: 0; z-index: 90; display: none;

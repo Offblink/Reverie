@@ -132,13 +132,23 @@ public class StoryEngine {
     /** TTS 音色清单（设置页用；引擎未就绪时空表） */
     public java.util.List<String> voices() { return player.voices(); }
 
-    /** 重听单段（SPEC §3.2 replaySegment） */
+    /** 试听音色（M9）：生成中拒绝；会打断当前朗读（设置页专用入口） */
+    public boolean previewVoice(String name) {
+        synchronized (this) { if (busy) return false; }
+        return player.previewSpeak(name);
+    }
+
+    /** 重听单段（SPEC §3.2 replaySegment）；未回答的段连选项一起念（M9） */
     public synchronized boolean replaySegment(int index) {
         if (story == null || busy) return false;
         if (index < 0 || index >= story.segments.size()) return false;
         Story.Segment seg = story.segments.get(index);
         player.beginReplay(index);
         for (String sent : splitSentences(seg.text)) player.replay(index, sent);
+        if (seg.choice == -1 && !seg.isFinal) {
+            String p = optionsPrompt(seg.options);
+            if (!p.isEmpty()) player.replay(index, p);
+        }
         player.endReplay();
         return true;
     }
@@ -160,6 +170,22 @@ public class StoryEngine {
     public void stopReplay() { player.stopReplay(); }
 
     public void shutdown() { stopAsr(); player.shutdown(); }
+
+    /** 选项朗读文案（M9）：「请选择。一，推开门看看。二，…。」；无有效选项返回空串 */
+    static String optionsPrompt(List<String> opts) {
+        if (opts == null || opts.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("请选择。");
+        String[] nums = {"一", "二", "三", "四", "五"};
+        int n = Math.min(opts.size(), nums.length);
+        boolean any = false;
+        for (int i = 0; i < n; i++) {
+            String o = opts.get(i);
+            if (o == null || o.trim().isEmpty()) continue;
+            sb.append(nums[i]).append('，').append(o.trim()).append('。');
+            any = true;
+        }
+        return any ? sb.toString() : "";
+    }
 
     /** 按句末标点切句（重听入队粒度；与 LlmClient 流式切句同标点集） */
     static List<String> splitSentences(String text) {
@@ -285,7 +311,9 @@ public class StoryEngine {
         asrActive = true;
         boolean started = recorder.start(win, new AsrRecorder.Listener() {
             @Override public void onAudio(byte[] wav) { exec.execute(() -> transcribe(idx, wav)); }
-            @Override public void onTimeout() { exec.execute(() -> asrEnded("timeout", idx, null, null, null)); }
+            @Override public void onTimeout(int peakRms) {
+                exec.execute(() -> asrEndedTimeout(idx, peakRms));
+            }
             @Override public void onError(String msg) { exec.execute(() -> asrEnded("error", idx, null, null, msg)); }
         });
         if (!started) { asrActive = false; return false; }
@@ -353,6 +381,19 @@ public class StoryEngine {
         emitAsr(state, idx, heard, choice, null, msg);
     }
 
+    /** 超时（M9）：带窗口峰值音量，JS 据此区分「没出声」vs「说了但没过阈」 */
+    private synchronized void asrEndedTimeout(int idx, int peakRms) {
+        asrActive = false;
+        try {
+            JSONObject ev = new JSONObject();
+            ev.put("type", "asr-state");
+            ev.put("state", "timeout");
+            ev.put("index", idx);
+            ev.put("peakRms", peakRms);
+            emitter.event(ev);
+        } catch (Exception ignored) { }
+    }
+
     /** 麦克风状态机事件（SPEC §3.2 asr-state） */
     private void emitAsr(String state, int index, String heard, Integer choice, Integer windowSec, String msg) {
         try {
@@ -418,6 +459,10 @@ public class StoryEngine {
                         busy = false;
                     }
                     emitDone(res);
+                    // 选项也要读（M9）：念完正文再念"请选择。一，…。二，…"，念完才 seal →
+                    // idle（弹坞+开麦）推迟到选项读完——睡前闭眼靠听就能选
+                    String optPrompt = optionsPrompt(res.options);
+                    if (!optPrompt.isEmpty()) player.enqueue(nextIndex, optPrompt);
                     player.seal(nextIndex);   // 文本到齐；TTS 念完最后一句 → idle → JS 弹选项
                     emitter.state();
                     // 结局段后不再自动续（choose 只在 !isFinal 时可用）

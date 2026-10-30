@@ -201,14 +201,17 @@ public final class TtsPlayer extends UtteranceProgressListener
         synchronized (this) { if (st == ST_OK && tts != null) tts.setSpeechRate(r); }
     }
 
-    /** 音色切换（M6）：存名待用；TTS 已就绪立即切。找不到该名保持当前音色。 */
+    /** 音色切换（M6/M9）：kokoro 音色名（zm_ 或 zf_ 前缀）走端上后端；其余给系统 TTS。找不到该名保持当前。 */
     public synchronized void setVoice(String name) {
         voiceName = name == null ? "" : name;
+        int sid = DeviceTts.sidForName(voiceName);
+        if (sid >= 0) deviceTts.setVoice(sid);   // 未就绪也先存，接管时生效
         applyVoiceLocked();
     }
 
-    /** 音色清单（设置页用）：init 就绪前返回空表；中文音色排前 */
+    /** 音色清单（设置页用）：端上后端 → kokoro 中文音色；系统后端 → 系统音色（中文优先） */
     public synchronized List<String> voices() {
+        if (useDevice) return DeviceTts.zhVoiceNames();
         List<String> out = new ArrayList<>();
         if (st != ST_OK || tts == null) return out;
         try {
@@ -219,6 +222,30 @@ public final class TtsPlayer extends UtteranceProgressListener
             Log.w(TAG, "getVoices failed: " + e);
         }
         return out;
+    }
+
+    /**
+     * 试听（M9）：念一句固定文案再停下。当前朗读被打断（在途结算为读完）；
+     * 生成中由引擎侧守卫拒绝。name 为 kokoro 音色名时临时用该音色，不改默认。
+     */
+    public synchronized boolean previewSpeak(String name) {
+        if (st != ST_OK) return false;
+        stopReplay();
+        stopPlaybackLocked();
+        settleInFlightLocked();
+        String id = "preview#" + (seq++);
+        if (useDevice) {
+            int sid = DeviceTts.sidForName(name);
+            if (sid < 0) sid = deviceTts.currentSid();
+            try { deviceTts.speak(id, DeviceTts.PREVIEW_TEXT, sid); }
+            catch (Exception e) { return false; }
+        } else {
+            int rc;
+            try { rc = tts.speak(DeviceTts.PREVIEW_TEXT, TextToSpeech.QUEUE_ADD, null, id); }
+            catch (Exception e) { rc = TextToSpeech.ERROR; }
+            if (rc == TextToSpeech.ERROR) return false;
+        }
+        return true;
     }
 
     private void applyVoiceLocked() {

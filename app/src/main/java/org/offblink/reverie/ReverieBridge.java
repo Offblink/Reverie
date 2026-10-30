@@ -107,6 +107,19 @@ public class ReverieBridge {
         }
     }
 
+    /** 试听音色（M9）：{name} → {ok}；生成中拒绝，会打断当前朗读 */
+    @JavascriptInterface
+    public String previewTts(String argsJson) {
+        try {
+            String name = new JSONObject(argsJson).optString("name", "");
+            JSONObject o = new JSONObject();
+            o.put("ok", engine != null && engine.previewVoice(name));
+            return o.toString();
+        } catch (Exception e) {
+            return err(e);
+        }
+    }
+
     /* ---------- 故事（M2） ---------- */
 
     @JavascriptInterface

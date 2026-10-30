@@ -5,10 +5,10 @@
 ## 特性
 
 - **流式生成**：第 1 句 1–2 秒开讲，不等整段写完
-- **逐句朗读**：TTS 念一句、高亮一句；读完才弹选项
+- **逐句朗读**：TTS 念一句、高亮一句；读完正文再念一遍选项（「请选择。一，…」），闭着眼也能选
 - **人称可选**：第一人称「我」亲历 / 第三人称旁观（每本书独立）
 - **语音选择**：段末自动开麦（倒计时环），说出选项继续；内置 26MB 中文识别模型，**离线可用**；没听清就点
-- **端上 TTS 兜底**：系统没有中文语音引擎（部分小米机型）时自动切内置 137MB 中文 VITS 模型，**离线出声**，不再降级纯文字
+- **端上 TTS 兜底**：系统没有中文语音引擎（部分小米机型）时自动切内置 Kokoro v1.1-zh（203MB，100 个中文音色，**默认男声**），离线出声；设置页可换音色并**试听**，句间停顿自然
 - **深色 Liquid Glass** 界面 + 页面缩放转场；设置页全部自绘控件（分段胶囊 / 抽屉）
 - **书架**：进行中 / 已完结，长按可删除；支持断点续听、整本重听
 - **严格超时**：超时只关麦，选项永远可点，不做哄睡自动选择
@@ -50,7 +50,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 | `engine/StoryEngine` | 生成 → 朗读 → 开麦 → 选择 状态机 |
 | `engine/LlmClient` | SSE 流式对话 + 增量切句 + 端点归一化 |
 | `engine/TtsPlayer` | 双后端逐句队列与看门狗（系统 TTS / 端上 VITS） |
-| `engine/DeviceTts` | sherpa-onnx OfflineTts：内置中文 VITS 模型合成 + AudioTrack 播放 |
+| `engine/DeviceTts` | sherpa-onnx OfflineTts：内置 Kokoro v1.1-zh（默认男声 zm_010）合成 + AudioTrack 播放 |
 | `engine/AsrRecorder` / `DeviceAsr` | 录音能量 VAD / sherpa-onnx 端上转写（内置中文模型） |
 | `engine/WhisperClient` | 云端 whisper 上传（可选模式） |
 | `assets/web/` | 四视图 UI、深色玻璃、页面转场 |

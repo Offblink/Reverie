@@ -8,7 +8,7 @@
 | 项 | 决定 |
 |---|---|
 | 项目名 | **Reverie** |
-| TTS | **系统 TTS 优先 + 端上 VITS 兜底**（`ttsMode`：auto=默认，系统无中文自动切端上；system/device 可强制）。端上模型：sherpa-onnx VITS fanchen-C（187 音色，137MB 内置） |
+| TTS | **系统 TTS 优先 + 端上 Kokoro 兜底**（`ttsMode`：auto=默认，系统无中文自动切端上；system/device 可强制）。端上模型：sherpa-onnx Kokoro v1.1-zh int8（100 个中文音色，默认男声 zm_010，203MB 内置）；设置页可换音色并试听 |
 | LLM | **设置页自填 OpenAI 兼容配置**：baseURL / apiKey / chatModel，key 不进 git |
 | ASR | **端上识别**：sherpa-onnx + zipformer2 CTC 中文 int8（26MB 内置模型，默认，离线可用）；云端 whisper 可选（独立 asrEndpoint/asrApiKey，MiMo 等无 transcriptions 网关的解法） |
 | 人称 | **每本书可选**（M8）：第一人称「我」亲历 / 第三人称旁观（默认）；只作用于正文，选项保持第二人称指令口吻 |
@@ -70,7 +70,8 @@
 | `deleteStory` | `{id}` | `{ok}` |
 | `getSettings` | — | 设置对象（**不含 apiKey**，仅 `hasKey:bool`） |
 | `setSettings` | `{...}` | `{ok}`（语速/音色即时生效，无需重启朗读） |
-| `getVoices` | — | `[name,…]` TTS 音色清单（zh 优先；TTS 未就绪为空表） |
+| `getVoices` | — | `[name,…]` TTS 音色清单（系统后端=系统音色；端上后端=kokoro 中文音色名）；TTS 未就绪为空表 |
+| `previewTts` | `{name}` | `{ok}` 试听该音色（单念一句固定文案，不改默认；生成中拒绝） |
 | `testEndpoint` | — | `{ok, latencyMs, msg}` 连通性探测 |
 | `startAsr` / `stopAsr` | — | `{ok}` / `{ok, needPermission}`（无 RECORD_AUDIO 时先弹系统授权） |
 
@@ -185,13 +186,18 @@
 
 ## 6. TTS 规格
 
-- 引擎（M8 起双后端，`ttsMode` 全局设置，切换重启生效）：
-  - **auto（默认）**：系统 `TextToSpeech` 优先；`setLanguage` 无中文 / init 失败 / 超时 → 自动切**端上 VITS**（sherpa-onnx fanchen-C，137MB 内置，离线）；端上也失败才降级纯文字。
+- 引擎（M8 双后端，`ttsMode` 全局设置，切换重启生效）：
+  - **auto（默认）**：系统 `TextToSpeech` 优先；`setLanguage` 无中文 / init 失败 / 超时 → 自动切**端上 Kokoro**（sherpa-onnx v1.1-zh int8，203MB 内置，离线）；端上也失败才降级纯文字。
   - **system**：只用系统 TTS，失败即降级纯文字。
-  - **device**：只用端上 VITS（无中文系统引擎设备的直选档）。
+  - **device**：只用端上 Kokoro（无中文系统引擎设备的直选档）。
 - 系统后端：`Locale.CHINA`；音色从 `getVoices()` 列表供设置页选择（抽屉式）；默认语速 **0.9**（睡前慢速），可调 0.7–1.1。
-- 端上后端：187 音色固定用 0 号（fanchen-C 默认女声）；语速参数直传 VITS speed；两级队列（合成线程 + 播放线程）句间无空隙；首启拷模型 + 加载约数十秒，期间句子缓冲不丢。
-- 逐句入队（§5.3 切句），`UtteranceProgressCallbacks.onDone`（端上为播放线程回调同一记账入口）推进下一句；全部句读完 → `tts-state{idle}` → web 浮现选项 + 原生自动 `startAsr`。
+- 端上后端（M9 换代，M8 的 VITS fanchen-C 因人机感/小孩声被否）：
+  - Kokoro v1.1-zh：100 个中文音色（55 女 + 45 男）；**默认男声 zm_010（sid 59）**；
+  - 设置页音色抽屉列 kokoro 音色（男声在前）+ **试听**（单念一句固定文案，不改默认，生成中拒绝）；
+  - 两级队列（合成线程 + 播放线程）+ **句尾 450ms 静音垫**（停顿自然，句间不硬切）；
+  - 首启拷 203MB 模型 + 加载约数十秒，期间句子缓冲不丢；tz 语速参数直传。
+- **选项朗读**（M9）：段文念完再念「请选择。一，…。二，…。」，念完才 idle → 弹坞 + 开麦（睡前闭眼可靠听选）；重播本段（未回答时）连选项一起念。
+- 逐句入队（§5.3 切句），系统 `UtteranceProgressCallbacks.onDone` / 端上播放线程回调**同一记账入口**推进下一句；全部句读完 → `tts-state{idle}` → web 浮现选项 + 原生自动 `startAsr`。
 - 屏幕策略：故事页默认 `keepScreenOn`（设置可关）；锁屏/后台不停止当前段朗读，但不再自动开麦（录音需前台）。
 - 两端都不可用 → 降级纯文字模式并提示，故事流程不中断。
 
@@ -218,6 +224,8 @@ sequenceDiagram
 - 权限：`RECORD_AUDIO` 运行时申请；拒绝 → 仅点击模式。
 - **选项匹配（本地，零额外请求）**：① 序号词（一/二/三/第一/1/2/…）→ 下标；② 归一化（去「选/第/个/吧/。」）后与选项文本做包含/相似度，≥0.5 取最高；③ 未命中视为无效响应。
 - 录音参数：16 kHz / mono / 16-bit PCM，直接封装 WAV（不引 lame）。
+- **VAD 自适应（M9 调优）**：噪声底 EMA 步长 0.05→0.15（初值 1200 约 0.4s 收敛到真实底噪——旧值要 2s，开麦头两秒的轻声必漏，真机实测坐实）；语音门限 = max(500, 噪声底×2.6)；只在静音块更新噪声底，语音不会把门限拉高。
+- **超时自诊断（M9）**：`asr-state{timeout}` 带 `peakRms`（窗口峰值音量）；JS 据此区分——峰值 <800 = 「没检测到声音」（靠近/大声），否则 = 「有动静但没当成人声」（环境噪），不再笼统说「没听到」。
 - 识别方式（`asrMode`）：**device（默认）** = sherpa-onnx 端上 zipformer2 CTC 中文 int8（26MB 内置，启动后台预热，离线可用）；**cloud** = 上传 whisper 端点。
 - 端点：云端模式走 `asrEndpoint/asrApiKey`（留空回落 LLM 的 endpoint/key）——LLM 用无 transcriptions 接口的网关（如 MiMo）时，给语音单独配一个 OpenAI 兼容端点即可。
 - whisper 失败（网络/余额）→ `asr-state{error}`，回落点击模式，不阻塞故事。端上模型未就绪/失败同口径。
@@ -248,6 +256,7 @@ sequenceDiagram
 | M6 | 书架删除手势 + 设置音色/语速 + 边角打磨 | 三挡各跑通一遍，60min 无崩溃 |
 | M7 | 端上识别：sherpa-onnx zipformer2 CTC int8（26MB 内置），默认；ASR 独立端点 | 说出「第一个」端上转写命中续写；模型零配置离线可用 |
 | M8 | 404 报错自证（URL+归一化）；设置页去原生控件（分段胶囊+音色抽屉）；端上 TTS（VITS fanchen-C 137MB 内置，auto 兜底系统无中文）；人称选择（first/third） | 系统无中文引擎的设备（小米）auto 模式自动切端上出声；人称注入 system prompt（单测钉）；脏端点保存即归一 |
+| M9 | 选项朗读（段文后念「请选择。一，…」再弹坞开麦）；端上 TTS 换代 Kokoro v1.1-zh（100 中文音色/默认男声 zm_010/句尾静音垫/试听）；ASR VAD 收敛加速+超时带峰值音量自诊断 | 闭眼听选项可直接语音选；kokoro 出声且男声、句间停顿自然；轻声说话能检出（peakRms 诊断区分没出声/没过阈） |
 
 每增量收尾：`assembleDebug` + 该增量直接触及路径的冒烟；UI 改动真机截图验收。
 

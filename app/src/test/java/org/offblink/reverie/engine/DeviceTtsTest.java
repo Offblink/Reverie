@@ -27,6 +27,38 @@ public class DeviceTtsTest {
         assertEquals(-Short.MAX_VALUE, pcm[1]);
     }
 
+    @Test
+    public void voiceNameToSidMatchesKokoroOrder() {
+        // v1.1-zh voices.bin：0-2 en / 3-57 女 / 58-102 男；默认男声 zm_010 = sid 59
+        assertEquals(103, DeviceTts.VOICE_NAMES.length);
+        assertEquals(3, DeviceTts.sidForName("zf_001"));
+        assertEquals(58, DeviceTts.sidForName("zm_009"));
+        assertEquals(59, DeviceTts.sidForName("zm_010"));
+        assertEquals(59, DeviceTts.DEFAULT_SID);
+        assertEquals(102, DeviceTts.sidForName("zm_100"));
+        assertEquals(-1, DeviceTts.sidForName("nope"));
+        assertEquals(-1, DeviceTts.sidForName(null));
+        assertEquals(-1, DeviceTts.sidForName(""));   // M8 时代残留音色名 → 回落默认男声
+    }
+
+    @Test
+    public void zhVoiceNamesSkipEnglishVoices() {
+        java.util.List<String> v = DeviceTts.zhVoiceNames();
+        assertEquals(100, v.size());                 // 55 女 + 45 男
+        assertEquals("zf_001", v.get(0));
+        int males = 0;
+        for (String s : v) if (s.startsWith("zm_")) males++;
+        assertEquals(45, males);
+    }
+
+    @Test
+    public void padTailAppendsSilence() {
+        float[] in = new float[100];
+        float[] out = DeviceTts.padTail(in, 24000);
+        assertEquals(100 + 10800, out.length);       // 0.45s @ 24kHz
+        assertEquals(0f, out[out.length - 1], 1e-9);
+    }
+
     private static byte[] wavOf(short[] pcm) {
         java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(44 + pcm.length * 2)
                 .order(java.nio.ByteOrder.LITTLE_ENDIAN);

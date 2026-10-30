@@ -204,14 +204,21 @@
     voiceNames = bridge('getVoices') || [];
     voiceCurrent = st.ttsVoice || '';
     $('voice-val').textContent = st.ttsVoice
-      ? st.ttsVoice
-      : (voiceNames.length ? '默认（系统音色）' : '语音引擎未就绪');
+      ? voiceLabel(st.ttsVoice)
+      : (voiceNames.length ? '默认' : '语音引擎未就绪');
     $('in-rate').value = st.ttsRate != null ? Number(st.ttsRate).toFixed(1) : '0.9';
     $('in-mic').value = st.micWindowSec != null ? st.micWindowSec : '10';
     $('set-hint').textContent = st.hasKey ? '已配置 key' : '尚未配置 key';
   }
 
-  /* 音色抽屉：打开时按当前清单渲染，点选即回写并关闭 */
+  /** 音色显示名：kokoro 前缀标性别（M9） */
+  function voiceLabel(n) {
+    if (/^zm_/.test(n)) return '男声 ' + n;
+    if (/^zf_/.test(n)) return '女声 ' + n;
+    return n;
+  }
+
+  /* 音色抽屉：男声在前（M9 用户偏好），点行选中，试听胶囊单念一句不改默认 */
   function openVoicePicker() {
     var mask = $('voice-mask'), list = $('voice-list');
     list.innerHTML = '';
@@ -223,18 +230,39 @@
       list.appendChild(none);
     }
     var curVal = voiceCurrent;
-    [{ v: '', n: '默认（系统音色）' }].concat(voiceNames.map(function (x) { return { v: x, n: x }; }))
-      .forEach(function (o) {
-        var b = document.createElement('button');
-        b.className = 'pick-item' + (o.v === curVal ? ' sel' : '');
-        b.innerHTML = '<span>' + esc(o.n) + '</span>' + (o.v === curVal ? '<span class="tick">✓</span>' : '');
-        b.addEventListener('click', function () {
-          voiceCurrent = o.v;
-          $('voice-val').textContent = o.n;
-          mask.classList.remove('on');
-        });
-        list.appendChild(b);
+    var items = [{ v: '', n: '默认' }];
+    voiceNames.filter(function (x) { return /^zm_/.test(x); })
+      .forEach(function (x) { items.push({ v: x, n: voiceLabel(x) }); });
+    voiceNames.filter(function (x) { return /^zf_/.test(x); })
+      .forEach(function (x) { items.push({ v: x, n: voiceLabel(x) }); });
+    voiceNames.filter(function (x) { return !/^z[fm]_/.test(x); })
+      .forEach(function (x) { items.push({ v: x, n: x }); });
+
+    items.forEach(function (o) {
+      var row = document.createElement('div');
+      row.className = 'pick-item' + (o.v === curVal ? ' sel' : '');
+      var pick = document.createElement('button');
+      pick.className = 'pick-main';
+      pick.innerHTML = '<span>' + esc(o.n) + '</span>' + (o.v === curVal ? '<span class="tick">✓</span>' : '');
+      pick.addEventListener('click', function () {
+        voiceCurrent = o.v;
+        $('voice-val').textContent = o.n;
+        mask.classList.remove('on');
       });
+      row.appendChild(pick);
+      if (o.v) {   // 具体音色才可试听
+        var tryBtn = document.createElement('button');
+        tryBtn.className = 'pick-try';
+        tryBtn.textContent = '试听';
+        tryBtn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var r = bridge('previewTts', { name: o.v });
+          toast(r && r.ok ? '试听：' + o.n : '试听失败（引擎未就绪或正在生成）');
+        });
+        row.appendChild(tryBtn);
+      }
+      list.appendChild(row);
+    });
     mask.classList.add('on');
   }
   var voiceCurrent = '';   // 抽屉选中的音色（保存时进 patch）
@@ -493,8 +521,16 @@
         } else {
           asrRingStop();
           if (ev.state === 'timeout') {
-            toast(ev.heard ? '听到「' + ev.heard + '」但没对上选项 —— 点一下吧'
-                           : '没听到选择，选项还在等着');
+            // M9：带窗口峰值音量，自我诊断「没出声」vs「说了没过阈」
+            if (ev.heard) {
+              toast('听到「' + ev.heard + '」但没对上选项 —— 点一下吧');
+            } else if (ev.peakRms != null && ev.peakRms < 800) {
+              toast('没检测到你的声音 —— 靠近手机、说大声一点再按麦克风');
+            } else if (ev.peakRms != null) {
+              toast('听到了动静但没当成人声（环境噪音可能偏大）—— 再按麦克风说一次');
+            } else {
+              toast('没听到选择，选项还在等着');
+            }
           } else if (ev.state === 'error') {
             toast(ev.msg || '语音识别失败，可点击选择');
           }
