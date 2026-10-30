@@ -44,6 +44,45 @@ public class LlmClient {
             .readTimeout(120, TimeUnit.SECONDS)
             .build();
 
+    /**
+     * BASE URL 归一化（用户输入容错，M8）：
+     * - 去首尾空白/控制字符（手机粘贴常带换行，曾污染 Authorization 头）
+     * - 少写协议 → 补 https://
+     * - 粘了完整接口路径（/chat/completions 等）→ 去掉，只留 base
+     * - 去尾斜杠
+     * 不猜 /v1：有的网关没有该层，猜错反而制造新 404；填错路径由报错信息自证。
+     */
+    public static String normalizeBase(String raw) {
+        if (raw == null) return "";
+        // 全角空格 U+3000、BOM U+FEFF：手机输入法/剪贴板常见夹带
+        String u = raw.replace("\u3000", " ").replace("\uFEFF", "")
+                .replaceAll("[\\r\\n\\t]", "").trim();
+        if (u.isEmpty()) return "";
+        if (!u.contains("://")) u = "https://" + u;
+        final String[] tails = {"/chat/completions", "/audio/transcriptions", "/completions"};
+        while (true) {
+            String lower = u.toLowerCase(java.util.Locale.ROOT);
+            String hit = null;
+            for (String t : tails) {
+                if (lower.endsWith(t)) { hit = t; break; }
+            }
+            if (hit == null) break;
+            u = u.substring(0, u.length() - hit.length());
+        }
+        while (u.endsWith("/")) u = u.substring(0, u.length() - 1);
+        return u;
+    }
+
+    /** HTTP 错误统一口径：带上真实请求 URL，响应体为空时明说并指向最常见原因 */
+    public static String httpError(int code, String url, String body) {
+        String b = trim(body, 300);
+        if (b.isEmpty()) {
+            return "HTTP " + code + " POST " + url
+                    + "（响应体为空）—— 检查 BASE URL 路径：应填到 /v1 为止，勿重复 /chat/completions";
+        }
+        return "HTTP " + code + " POST " + url + ": " + b;
+    }
+
     /** 异步流式请求；回调在 OkHttp 线程，调用方自己切线程 */
     public Call stream(String baseUrl, String apiKey, String model,
                        List<String[]> messages,   // [role, content]
@@ -64,22 +103,23 @@ public class LlmClient {
             throw new IOException("build body: " + e);
         }
 
+        String url = normalizeBase(baseUrl) + "/chat/completions";
         Request.Builder rb = new Request.Builder()
-                .url(baseUrl.replaceAll("/+$", "") + "/chat/completions")
+                .url(url)
                 .post(RequestBody.create(body.toString(), JSON_T));
         if (!apiKey.isEmpty()) rb.header("Authorization", "Bearer " + apiKey);
 
         Call call = http.newCall(rb.build());
         call.enqueue(new okhttp3.Callback() {
             @Override public void onFailure(Call c, IOException e) {
-                if (!c.isCanceled()) l.onError("网络失败: " + e.getMessage());
+                if (!c.isCanceled()) l.onError("网络失败 POST " + url + ": " + e.getMessage());
             }
 
             @Override public void onResponse(Call c, Response resp) {
                 try (Response r = resp) {
                     if (!r.isSuccessful()) {
                         String err = r.body() != null ? r.body().string() : "";
-                        l.onError("HTTP " + r.code() + ": " + trim(err, 300));
+                        l.onError(httpError(r.code(), url, err));
                         return;
                     }
                     if (r.body() == null || r.body().source() == null) {
@@ -107,14 +147,15 @@ public class LlmClient {
         arr.put(mm);
         body.put("messages", arr);
         long t0 = System.currentTimeMillis();
+        String url = normalizeBase(baseUrl) + "/chat/completions";
         Request.Builder rb = new Request.Builder()
-                .url(baseUrl.replaceAll("/+$", "") + "/chat/completions")
+                .url(url)
                 .post(RequestBody.create(body.toString(), JSON_T));
         if (!apiKey.isEmpty()) rb.header("Authorization", "Bearer " + apiKey);
         try (Response r = http.newCall(rb.build()).execute()) {
             if (!r.isSuccessful()) {
                 String err = r.body() != null ? r.body().string() : "";
-                throw new IOException("HTTP " + r.code() + ": " + trim(err, 200));
+                throw new IOException(httpError(r.code(), url, err));
             }
             return System.currentTimeMillis() - t0;
         }

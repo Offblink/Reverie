@@ -20,7 +20,7 @@
     { id: 'fairy',    name: '童话',     desc: '适龄 · 奇幻',       g1: '#7A6B9E', g2: '#2E2645' },
     { id: 'doomsday', name: '末日',     desc: '生存 · 人性',       g1: '#6B5B3E', g2: '#2B2416' }
   ];
-  var sel = { theme: null, tier: null };
+  var sel = { theme: null, tier: null, pov: 'third' };   // 人称默认第三人称（预选）
 
   var grid = $('theme-grid');
   THEMES.forEach(function (t) {
@@ -45,12 +45,19 @@
     syncStart();
   });
 
+  $('pov-row').addEventListener('click', function (e) {
+    var p = e.target.closest('.tier-pill');
+    if (!p) return;
+    sel.pov = p.dataset.pov;
+    [].forEach.call(this.children, function (c) { c.classList.toggle('sel', c === p); });
+  });
+
   function syncStart() {
     $('start-btn').classList.toggle('off', !(sel.theme && sel.tier));
   }
 
   $('start-btn').addEventListener('click', function () {
-    var r = bridge('newStory', { theme: sel.theme, tier: sel.tier });
+    var r = bridge('newStory', { theme: sel.theme, tier: sel.tier, pov: sel.pov });
     if (!r || !r.id) { toast('还没有配置模型 —— 先到设置里填好 endpoint 与 key'); return; }
     zoomToStory();
   });
@@ -162,43 +169,99 @@
   }
 
   /* ---------- 设置 ---------- */
+  /** 分段胶囊控件：点按钮选中，data-v 为值 */
+  function bindSeg(id, onChange) {
+    var box = $(id);
+    box.addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-v]');
+      if (!b) return;
+      setSeg(box, b.dataset.v);
+      if (onChange) onChange(b.dataset.v);
+    });
+  }
+  function setSeg(box, v) {
+    [].forEach.call(box.children, function (c) {
+      c.classList.toggle('sel', c.dataset.v === v);
+    });
+  }
+  function segVal(id) {
+    var s = $(id).querySelector('button.sel');
+    return s ? s.dataset.v : '';
+  }
+
+  var voiceNames = [];   // 当前音色清单（getVoices 快照），抽屉选中回写用
+
   function loadSettings() {
     var st = bridge('getSettings') || {};
     $('in-endpoint').value = st.endpoint || '';
     $('in-key').value = '';                 // key 永不回显
     $('in-chat').value = st.chatModel || '';
     $('in-asr').value = st.asrModel || '';
-    $('in-asr-mode').value = st.asrMode === 'cloud' ? 'cloud' : 'device';
+    setSeg($('in-asr-mode'), st.asrMode === 'cloud' ? 'cloud' : 'device');
+    setSeg($('in-tts-mode'), st.ttsMode || 'auto');
     $('in-asr-endpoint').value = st.asrEndpoint || '';   // 云端 ASR 端点：空 = 跟随主端点
     $('in-asr-key').value = '';                          // ASR 独立 key 同样不回显
-    // 音色清单来自动态桥（TTS 未就绪时为空 → 提示）
-    var vsel = $('in-voice');
-    var voices = bridge('getVoices') || [];
-    vsel.innerHTML = '';
-    var def = document.createElement('option');
-    def.value = '';
-    def.textContent = voices.length ? '默认（系统音色）' : '语音引擎未就绪';
-    vsel.appendChild(def);
-    voices.forEach(function (name) {
-      var o = document.createElement('option');
-      o.value = name;
-      o.textContent = name;
-      vsel.appendChild(o);
-    });
-    vsel.value = st.ttsVoice || '';
+    voiceNames = bridge('getVoices') || [];
+    voiceCurrent = st.ttsVoice || '';
+    $('voice-val').textContent = st.ttsVoice
+      ? st.ttsVoice
+      : (voiceNames.length ? '默认（系统音色）' : '语音引擎未就绪');
     $('in-rate').value = st.ttsRate != null ? Number(st.ttsRate).toFixed(1) : '0.9';
     $('in-mic').value = st.micWindowSec != null ? st.micWindowSec : '10';
     $('set-hint').textContent = st.hasKey ? '已配置 key' : '尚未配置 key';
   }
+
+  /* 音色抽屉：打开时按当前清单渲染，点选即回写并关闭 */
+  function openVoicePicker() {
+    var mask = $('voice-mask'), list = $('voice-list');
+    list.innerHTML = '';
+    if (!voiceNames.length) {
+      var none = document.createElement('div');
+      none.className = 'tiny';
+      none.style.padding = '10px 4px';
+      none.textContent = '语音引擎未就绪（可到「语音引擎」切到端上模型）';
+      list.appendChild(none);
+    }
+    var curVal = voiceCurrent;
+    [{ v: '', n: '默认（系统音色）' }].concat(voiceNames.map(function (x) { return { v: x, n: x }; }))
+      .forEach(function (o) {
+        var b = document.createElement('button');
+        b.className = 'pick-item' + (o.v === curVal ? ' sel' : '');
+        b.innerHTML = '<span>' + esc(o.n) + '</span>' + (o.v === curVal ? '<span class="tick">✓</span>' : '');
+        b.addEventListener('click', function () {
+          voiceCurrent = o.v;
+          $('voice-val').textContent = o.n;
+          mask.classList.remove('on');
+        });
+        list.appendChild(b);
+      });
+    mask.classList.add('on');
+  }
+  var voiceCurrent = '';   // 抽屉选中的音色（保存时进 patch）
+
+  $('voice-row').addEventListener('click', openVoicePicker);
+  $('voice-close').addEventListener('click', function () { $('voice-mask').classList.remove('on'); });
+  $('voice-mask').addEventListener('click', function (e) {
+    if (e.target === $('voice-mask')) $('voice-mask').classList.remove('on');
+  });
+
+  bindSeg('in-asr-mode');
+  bindSeg('in-tts-mode', function (v) {
+    $('tts-mode-hint').textContent = v === 'auto'
+      ? '自动＝优先系统 TTS，没有中文引擎时用内置端上模型'
+      : v === 'system' ? '只用系统 TTS；系统没有中文引擎时会退回纯文字'
+      : '只用内置端上模型（离线，首次开故事时初始化约需数十秒）';
+  });
 
   $('save-btn').addEventListener('click', function () {
     var patch = {
       endpoint: $('in-endpoint').value.trim(),
       chatModel: $('in-chat').value.trim(),
       asrModel: $('in-asr').value.trim(),
-      asrMode: $('in-asr-mode').value,
+      asrMode: segVal('in-asr-mode') || 'device',
+      ttsMode: segVal('in-tts-mode') || 'auto',
       asrEndpoint: $('in-asr-endpoint').value.trim(),   // 空 = 清掉=跟随主端点
-      ttsVoice: $('in-voice').value,
+      ttsVoice: voiceCurrent,
       ttsRate: parseFloat($('in-rate').value) || 0.9,
       micWindowSec: parseInt($('in-mic').value, 10) || 10
     };

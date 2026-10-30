@@ -34,6 +34,7 @@ public class StoryEngine {
         String chatModel();
         float ttsRate();
         String ttsVoice();
+        String ttsMode();       // auto=系统优先无中文切端上（默认）| system | device（M8）
         String asrModel();
         String asrMode();       // "device"=端上模型（默认）| "cloud"=云端 whisper（M7）
         String asrEndpoint();   // 独立 ASR 端点；空 = 跟随 LLM（M6）
@@ -100,7 +101,7 @@ public class StoryEngine {
             try { Thread.sleep(5000); } catch (InterruptedException ignored) { }
             deviceAsr.init();
         }, "reverie-asr-init").start();
-        this.player = new TtsPlayer(ctx, settings.ttsRate(), new TtsPlayer.Listener() {
+        this.player = new TtsPlayer(ctx, settings.ttsRate(), settings.ttsMode(), new TtsPlayer.Listener() {
             @Override public void onSpeaking(int seg, String text) {
                 emitTts("speaking", seg, text);
             }
@@ -182,8 +183,8 @@ public class StoryEngine {
     public synchronized Story story() { return story; }
     public synchronized boolean busy() { return busy; }
 
-    /** 新故事：建档落盘，立即生成第 1 段。返回故事 id。 */
-    public String newStory(final String themeId, final String tier) {
+    /** 新故事：建档落盘，立即生成第 1 段。返回故事 id。pov：first|third（其余回落 third）。 */
+    public String newStory(final String themeId, final String tier, final String pov) {
         stopAsr();                // 上一本还在开麦/在念的话，先停
         player.halt();
         final Story s = new Story();
@@ -191,6 +192,7 @@ public class StoryEngine {
         s.themeId = themeId;
         s.themeName = THEME_NAME.getOrDefault(themeId, themeId);
         s.tier = tier;
+        s.pov = "first".equals(pov) ? "first" : "third";
         s.choicesTarget = tierTotal(tier);
         s.created = System.currentTimeMillis();
         try { store.save(s); } catch (Exception ignored) { }
@@ -433,8 +435,8 @@ public class StoryEngine {
         }
     }
 
-    /** system + user 组装（SPEC §5.1/5.2） */
-    private static List<String[]> buildMessages(Story s, int nextIndex) {
+    /** system + user 组装（SPEC §5.1/5.2）。包私有：单测钉人称注入与进度指令 */
+    static List<String[]> buildMessages(Story s, int nextIndex) {
         List<String[]> msgs = new ArrayList<>();
 
         boolean isFinalTurn = nextIndex >= s.choicesTarget;   // 互动数用满 → 写结局
@@ -442,6 +444,13 @@ public class StoryEngine {
 
         StringBuilder sys = new StringBuilder();
         sys.append("你是「Reverie」的睡前故事叙述者。").append(style).append('\n');
+        // 叙述人称（M8）：作用于正文；选项永远是对听众的指令，保持第二人称口吻
+        if ("first".equals(s.pov)) {
+            sys.append("叙述人称：第一人称——正文以主角「我」的口吻讲述。\n");
+        } else {
+            sys.append("叙述人称：第三人称——正文以「他/她」或角色名讲述主角，勿用「你」称呼主角。\n");
+        }
+        sys.append("options 是给听众的指令，保持第二人称口吻（如「推开门看看」），不受叙述人称影响。\n");
         sys.append("输出必须是且只是一个 JSON 对象，字段顺序固定：segment, options, is_final, synopsis");
         if (s.title.isEmpty()) sys.append(", title");
         sys.append("。不要输出 JSON 之外的任何文字、解释或 markdown 围栏。\n");

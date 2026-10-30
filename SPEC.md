@@ -8,11 +8,12 @@
 | 项 | 决定 |
 |---|---|
 | 项目名 | **Reverie** |
-| TTS | **系统 TTS**（`android.speech.tts.TextToSpeech`），起步不接云 TTS |
+| TTS | **系统 TTS 优先 + 端上 VITS 兜底**（`ttsMode`：auto=默认，系统无中文自动切端上；system/device 可强制）。端上模型：sherpa-onnx VITS fanchen-C（187 音色，137MB 内置） |
 | LLM | **设置页自填 OpenAI 兼容配置**：baseURL / apiKey / chatModel，key 不进 git |
 | ASR | **端上识别**：sherpa-onnx + zipformer2 CTC 中文 int8（26MB 内置模型，默认，离线可用）；云端 whisper 可选（独立 asrEndpoint/asrApiKey，MiMo 等无 transcriptions 网关的解法） |
+| 人称 | **每本书可选**（M8）：第一人称「我」亲历 / 第三人称旁观（默认）；只作用于正文，选项保持第二人称指令口吻 |
 | 无响应行为 | **严格超时**：段末开麦一个窗口，超时关麦、选项仍可点；睡着 = 停在当前选择页，下次续听。**不做**哄睡自动选择 |
-| 设计 | **深色 Liquid Glass**（Mobile-Design 的 glass 组件移植）+ **Blinvo zoom-transition** 页间转场 |
+| 设计 | **深色 Liquid Glass**（Mobile-Design 的 glass 组件移植）+ **Blinvo zoom-transition** 页间转场；**设置页禁止原生控件**（select/radio 一律自绘分段胶囊/抽屉） |
 | 鬼故事 | **惊悚度不做应用侧限制**，按 LLM 提供方自身边界 |
 | 长度 | 短 ≈20min / 中 ≈60min / 长 ≈100min（朗读时长口径，见 §5） |
 | 技术栈 | Java、minSdk 26 / targetSdk 37 / compileSdk 37、OkHttp、单 Activity |
@@ -43,7 +44,8 @@
 | 原生 | `engine/LlmClient` | OkHttp SSE 流式 chat/completions |
 | 原生 | `engine/StoryEngine` | 状态机：生成→TTS→开麦→选择→生成…；编排者 |
 | 原生 | `engine/Story` + `StoryStore` | 数据模型 + `filesDir/stories/<id>.json` |
-| 原生 | `engine/TtsPlayer` | 系统 TTS，逐句入队，UtteranceProgressCallbacks |
+| 原生 | `engine/TtsPlayer` | 双后端播讲器：系统 TTS / 端上 VITS（M8），逐句入队，记账与看门狗 |
+| 原生 | `engine/DeviceTts` | sherpa-onnx OfflineTts 封装（M8）：模型拼接/加载、合成+AudioTrack 播放两级队列 |
 | 原生 | `engine/AsrRecorder` + `engine/DeviceAsr` | AudioRecord 16k PCM→WAV + VAD；sherpa-onnx 端上转写（M7） |
 | 原生 | `engine/WhisperClient` | 云端 whisper 上传（M5，asrMode=cloud 时用） |
 | 原生 | `Settings` | SharedPreferences：endpoint/key/model/音色/语速/麦克风窗口 |
@@ -58,7 +60,7 @@
 | 方法 | 参数 | 返回 |
 |---|---|---|
 | `getState` | — | 全量快照 `{settings(不含key), story, busy, screenHint}` |
-| `newStory` | `{theme, tier}` | `{id}` 立即建档并开始生成第 1 段 |
+| `newStory` | `{theme, tier, pov?}` | `{id}` 立即建档并开始生成第 1 段；pov：first/third，缺省 third |
 | `choose` | `{index}` | `{ok}` 记录选择并触发下一段生成 |
 | `replay` | `{fromSegment?}` | `{ok}` 重听模式：从指定段顺序朗读 |
 | `stopReplay` | — | `{ok}` |
@@ -121,7 +123,8 @@
 ```
 
 - 写盘时机：新档、每段生成完毕、每次选择。写入走临时文件 + rename（崩溃安全）。
-- 设置存 SharedPreferences：`endpoint / apiKey / chatModel / asrMode / asrModel / asrEndpoint / asrApiKey / ttsVoice / ttsRate / micWindowSec / keepScreenOn`。`asrMode` 默认 `device`（端上模型）；`asrEndpoint/asrApiKey` 留空 = 跟随 LLM 配置。apiKey 只在原生域，**永不**经桥下发给 JS。
+- 设置存 SharedPreferences：`endpoint / apiKey / chatModel / asrMode / asrModel / asrEndpoint / asrApiKey / ttsMode / ttsVoice / ttsRate / micWindowSec / keepScreenOn`。`asrMode` 默认 `device`（端上模型）；`ttsMode` 默认 `auto`（系统优先无中文切端上）；`asrEndpoint/asrApiKey` 留空 = 跟随 LLM 配置。apiKey 只在原生域，**永不**经桥下发给 JS。
+- 端点在**保存时归一化**（去换行/全角空白、补 https://、剥离重复的 `/chat/completions` 等路径尾巴、去尾斜杠）；HTTP 报错统一带真实请求 URL，响应体为空时明说并指向路径填法（M8，修「配置没问题却 404 且报错空洞」）。
 
 ## 5. LLM 契约
 
@@ -182,10 +185,15 @@
 
 ## 6. TTS 规格
 
-- 引擎：系统 `TextToSpeech`，`Locale.CHINA`；音色从 `getVoices()` 列表供设置页选择；默认语速 **0.9**（睡前慢速），可调 0.7–1.1。
-- 逐句入队（§5.3 切句），`UtteranceProgressCallbacks.onDone` 推进下一句；全部句读完 → `tts-state{idle}` → web 浮现选项 + 原生自动 `startAsr`。
+- 引擎（M8 起双后端，`ttsMode` 全局设置，切换重启生效）：
+  - **auto（默认）**：系统 `TextToSpeech` 优先；`setLanguage` 无中文 / init 失败 / 超时 → 自动切**端上 VITS**（sherpa-onnx fanchen-C，137MB 内置，离线）；端上也失败才降级纯文字。
+  - **system**：只用系统 TTS，失败即降级纯文字。
+  - **device**：只用端上 VITS（无中文系统引擎设备的直选档）。
+- 系统后端：`Locale.CHINA`；音色从 `getVoices()` 列表供设置页选择（抽屉式）；默认语速 **0.9**（睡前慢速），可调 0.7–1.1。
+- 端上后端：187 音色固定用 0 号（fanchen-C 默认女声）；语速参数直传 VITS speed；两级队列（合成线程 + 播放线程）句间无空隙；首启拷模型 + 加载约数十秒，期间句子缓冲不丢。
+- 逐句入队（§5.3 切句），`UtteranceProgressCallbacks.onDone`（端上为播放线程回调同一记账入口）推进下一句；全部句读完 → `tts-state{idle}` → web 浮现选项 + 原生自动 `startAsr`。
 - 屏幕策略：故事页默认 `keepScreenOn`（设置可关）；锁屏/后台不停止当前段朗读，但不再自动开麦（录音需前台）。
-- 引擎未就绪 / 无中文包（模拟器 AOSP 常见）→ 降级纯文字模式并提示，故事流程不中断。
+- 两端都不可用 → 降级纯文字模式并提示，故事流程不中断。
 
 ## 7. ASR（语音选择）规格
 
@@ -238,6 +246,8 @@ sequenceDiagram
 | M4 | TTS 逐句朗读 + 句高亮 + 读完才弹选项 + 重听 | 短故事全程听读，断点续听、重听 |
 | M5 | ASR：录音/VAD/whisper/匹配 + 倒计时环 + 运行时权限 | 语音选择闭环，超时关麦回落点击（语音命中链路需真机复验，模拟器无音频输入） |
 | M6 | 书架删除手势 + 设置音色/语速 + 边角打磨 | 三挡各跑通一遍，60min 无崩溃 |
+| M7 | 端上识别：sherpa-onnx zipformer2 CTC int8（26MB 内置），默认；ASR 独立端点 | 说出「第一个」端上转写命中续写；模型零配置离线可用 |
+| M8 | 404 报错自证（URL+归一化）；设置页去原生控件（分段胶囊+音色抽屉）；端上 TTS（VITS fanchen-C 137MB 内置，auto 兜底系统无中文）；人称选择（first/third） | 系统无中文引擎的设备（小米）auto 模式自动切端上出声；人称注入 system prompt（单测钉）；脏端点保存即归一 |
 
 每增量收尾：`assembleDebug` + 该增量直接触及路径的冒烟；UI 改动真机截图验收。
 

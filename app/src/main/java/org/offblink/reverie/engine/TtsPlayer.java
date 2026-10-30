@@ -40,6 +40,7 @@ public final class TtsPlayer extends UtteranceProgressListener
     private static final long NO_START_MS = 15_000;    // 入队后没开读：丢句跳过
     private static final long STUCK_MS = 45_000;       // 开读后 45s 没读完：引擎卡死
     private static final long INIT_TIMEOUT_MS = 12_000;// init 无回调：降级
+    private static final long DEVICE_INIT_TIMEOUT_MS = 90_000; // 端上模型首启拷 137MB+加载
 
     public interface Listener {
         void onSpeaking(int seg, String text);   // 某句开读（JS 高亮）
@@ -67,9 +68,13 @@ public final class TtsPlayer extends UtteranceProgressListener
     private final Handler main = new Handler(Looper.getMainLooper());
     private volatile float rate;
     private String voiceName = "";   // 音色（M6）；空 = 系统默认
+    private final String ttsMode;    // auto=系统优先无中文切端上（默认）| system | device（M8）
+    private final DeviceTts deviceTts;
 
     private TextToSpeech tts;
     private int st = ST_INIT;
+    private boolean useDevice = false;       // 当前后端：true=端上 VITS
+    private boolean deviceSwitching = false; // 端上引擎初始化中（防重复起线程/防系统超时误杀）
 
     private final Map<Integer, SegRec> segs = new HashMap<>();
     private final List<Item> undelivered = new ArrayList<>();   // 等 init 的缓冲
@@ -88,9 +93,11 @@ public final class TtsPlayer extends UtteranceProgressListener
     private final Runnable queueWatch = new Runnable() {
         @Override public void run() {
             synchronized (TtsPlayer.this) {
+                // 端上后端首句合成含 JIT 预热，可能 >15s——放宽到 60s，防误丢句
+                long noStart = useDevice ? 60_000 : NO_START_MS;
                 if (st == ST_OK && !inFlight.isEmpty()
-                        && System.currentTimeMillis() - lastProgressAt > NO_START_MS) {
-                    // 队列 15s 无任何动静：引擎丢了队头，跳过它继续（下轮再看新队头）
+                        && System.currentTimeMillis() - lastProgressAt > noStart) {
+                    // 队列长时间无任何动静：引擎丢了队头，跳过它继续（下轮再看新队头）
                     String head = inFlight.get(0);
                     Log.w(TAG, "drop queue head (no progress): " + head);
                     finishLocked(head);
@@ -101,19 +108,77 @@ public final class TtsPlayer extends UtteranceProgressListener
         }
     };
 
-    public TtsPlayer(Context ctx, float rate, Listener listener) {
+    public TtsPlayer(Context ctx, float rate, String ttsMode, Listener listener) {
         this.appCtx = ctx.getApplicationContext();
         this.rate = rate;
+        this.ttsMode = ttsMode;
         this.listener = listener;
+        // 端上后端：回调直接进系统 TTS 同一套 onStart/onDone 记账（id 语义一致）
+        this.deviceTts = new DeviceTts(appCtx, new DeviceTts.Listener() {
+            @Override public void onStart(String id) { TtsPlayer.this.onStart(id); }
+            @Override public void onDone(String id) { TtsPlayer.this.onDone(id); }
+        });
     }
 
     public void init() {
+        if ("device".equals(ttsMode)) {
+            switchToDeviceLocked("ttsMode=device");
+            return;
+        }
         tts = new TextToSpeech(appCtx, this);
         main.postDelayed(() -> {
             synchronized (TtsPlayer.this) {
-                if (st == ST_INIT) degradeLocked("init timeout " + INIT_TIMEOUT_MS + "ms");
+                if (st == ST_INIT) failOrDeviceLocked("init timeout " + INIT_TIMEOUT_MS + "ms");
             }
         }, INIT_TIMEOUT_MS);
+    }
+
+    /** 系统侧失败出口：auto/device 模式先试端上引擎，否则降级纯文字 */
+    private void failOrDeviceLocked(String why) {
+        if (canTryDeviceLocked()) switchToDeviceLocked(why);
+        else degradeLocked(why);
+    }
+
+    /** auto/device 模式下端上引擎可用（没在切、没失败过） */
+    private boolean canTryDeviceLocked() {
+        return !"system".equals(ttsMode) && !deviceSwitching && !useDevice && !deviceTts.failed();
+    }
+
+    /**
+     * 切到端上引擎：系统侧直接放弃（tts 置空防误用），模型后台初始化；
+     * 就绪后 st=ST_OK 起泵。首启拷 137MB+加载模型，90s 硬闸超时即降级。
+     * 在途句缓冲在 undelivered，就绪后照常 pump——切引擎不丢句。
+     */
+    private synchronized void switchToDeviceLocked(String why) {
+        if (deviceSwitching || useDevice || st == ST_DEAD) return;
+        deviceSwitching = true;
+        if (tts != null) {
+            try { tts.stop(); tts.shutdown(); } catch (Exception ignored) { }
+            tts = null;
+        }
+        Log.i(TAG, "switching to device tts (" + why + ")");
+        new Thread(() -> deviceTts.init(), "reverie-tts-dev-init").start();
+        final long deadline = System.currentTimeMillis() + DEVICE_INIT_TIMEOUT_MS;
+        main.postDelayed(() -> pollDeviceReadyLocked(deadline), 1_000);
+    }
+
+    /** 端上初始化轮询：就绪→接管；失败/过硬闸→降级；否则 3s 后再看 */
+    private void pollDeviceReadyLocked(long deadline) {
+        synchronized (this) {
+            if (useDevice || st == ST_DEAD) return;
+            if (deviceTts.ready()) {
+                deviceSwitching = false;
+                useDevice = true;
+                st = ST_OK;
+                Log.i(TAG, "device tts ready, taking over");
+                pumpLocked();
+            } else if (deviceTts.failed() || System.currentTimeMillis() >= deadline) {
+                deviceSwitching = false;
+                degradeLocked(deviceTts.failed() ? "device tts init failed" : "device tts init timeout");
+            } else {
+                main.postDelayed(() -> pollDeviceReadyLocked(deadline), 3_000);
+            }
+        }
     }
 
     public void shutdown() {
@@ -121,10 +186,18 @@ public final class TtsPlayer extends UtteranceProgressListener
             try { tts.stop(); tts.shutdown(); } catch (Exception ignored) { }
             tts = null;
         }
+        deviceTts.shutdown();
+    }
+
+    /** 停当前播放（两后端都停；未激活的后端调 stop 无副作用） */
+    private void stopPlaybackLocked() {
+        if (tts != null) tts.stop();
+        if (useDevice || deviceSwitching) deviceTts.stop();
     }
 
     public void setRate(float r) {
         rate = r;
+        deviceTts.setRate(r);   // 端上后端：下一句生效
         synchronized (this) { if (st == ST_OK && tts != null) tts.setSpeechRate(r); }
     }
 
@@ -195,7 +268,7 @@ public final class TtsPlayer extends UtteranceProgressListener
         // 结算在途、丢缓冲，最后建立新 replay 状态。结算必须在置位新状态之前，
         // 否则新 replay 会在入队前就被 checkReplayDone 误报完成。
         replayActive = false;
-        if (tts != null) tts.stop();
+        stopPlaybackLocked();
         settleInFlightLocked();
         removeReplayItemsLocked();
         replayActive = true;
@@ -218,7 +291,7 @@ public final class TtsPlayer extends UtteranceProgressListener
     public synchronized void stopReplay() {
         if (!replayActive && replayOutstanding == 0) return;
         replayActive = false;
-        if (tts != null) tts.stop();
+        stopPlaybackLocked();
         settleInFlightLocked();
         replayOutstanding = 0;
         removeReplayItemsLocked();
@@ -230,7 +303,7 @@ public final class TtsPlayer extends UtteranceProgressListener
      * tts.stop() 只影响队列，已入队的 g* 全部按读完结算，重试可重新入队。
      */
     public synchronized void abandon(int seg) {
-        if (tts != null) tts.stop();
+        stopPlaybackLocked();
         settleInFlightLocked();     // stop 后被取消句的 onDone 不会来，手动结算
         Iterator<Item> it = undelivered.iterator();
         while (it.hasNext()) {
@@ -247,7 +320,7 @@ public final class TtsPlayer extends UtteranceProgressListener
         replayActive = false;
         replayOutstanding = 0;
         replayLastSeg = -1;
-        if (tts != null) tts.stop();
+        stopPlaybackLocked();
         settleInFlightLocked();
         drainDeadLocked();          // 缓冲全部按读完结算并清空（旧故事的段不需要再读）
         reportSuppressedLocked();
@@ -286,7 +359,8 @@ public final class TtsPlayer extends UtteranceProgressListener
     }
 
     private void pumpLocked() {
-        if (st != ST_OK || undelivered.isEmpty() || tts == null) return;
+        if (st != ST_OK || undelivered.isEmpty()) return;
+        if (!useDevice && tts == null) return;
         Iterator<Item> it = undelivered.iterator();
         while (it.hasNext()) {
             Item i = it.next();
@@ -295,10 +369,15 @@ public final class TtsPlayer extends UtteranceProgressListener
             idSeg.put(id, i.seg);
             idText.put(id, i.text);
             inFlight.add(id);
-            int rc;
-            try { rc = tts.speak(i.text, TextToSpeech.QUEUE_ADD, null, id); }
-            catch (Exception e) { rc = TextToSpeech.ERROR; }
-            if (rc == TextToSpeech.ERROR) { degradeLocked("speak rejected"); return; }
+            if (useDevice) {
+                try { deviceTts.speak(id, i.text); }
+                catch (Exception e) { degradeLocked("device speak rejected: " + e.getMessage()); return; }
+            } else {
+                int rc;
+                try { rc = tts.speak(i.text, TextToSpeech.QUEUE_ADD, null, id); }
+                catch (Exception e) { rc = TextToSpeech.ERROR; }
+                if (rc == TextToSpeech.ERROR) { degradeLocked("speak rejected"); return; }
+            }
         }
         // 队列级看门狗：只在队列非空时轮询，按"整体进度"判引擎死活——
         // 单句从入队计时会被排在后面的句误伤（QUEUE_ADD 排队不是故障）
@@ -372,19 +451,20 @@ public final class TtsPlayer extends UtteranceProgressListener
     @Override
     public void onInit(int code) {
         synchronized (this) {
-            if (st == ST_DEAD) return;               // init 超时已降级，迟到回调作废
-            if (code != TextToSpeech.SUCCESS) { degradeLocked("init failed code=" + code); return; }
+            if (st == ST_DEAD || useDevice || deviceSwitching) return;   // 已降级/已切端上：迟到回调作废
+            if (code != TextToSpeech.SUCCESS) { failOrDeviceLocked("init failed code=" + code); return; }
             tts.setOnUtteranceProgressListener(this);
             try { tts.setSpeechRate(rate); } catch (Exception ignored) { }
             int lang;
             try { lang = tts.setLanguage(Locale.CHINA); }
-            catch (Exception e) { degradeLocked("setLanguage: " + e); return; }
+            catch (Exception e) { failOrDeviceLocked("setLanguage: " + e); return; }
             if (lang == TextToSpeech.LANG_MISSING_DATA || lang == TextToSpeech.LANG_NOT_SUPPORTED) {
-                degradeLocked("no zh lang (code=" + lang + ")");
+                // 用户手机正是这种：系统引擎在、但没有中文（M8）
+                failOrDeviceLocked("no zh lang (code=" + lang + ")");
                 return;
             }
             boolean zh = probeZh();
-            if (!zh && lang != TextToSpeech.LANG_AVAILABLE) { degradeLocked("no zh voice"); return; }
+            if (!zh && lang != TextToSpeech.LANG_AVAILABLE) { failOrDeviceLocked("no zh voice"); return; }
             Log.i(TAG, "ready lang=" + lang + " zhVoices=" + zh);
             st = ST_OK;
             applyVoiceLocked();   // 启动前存的音色此刻生效

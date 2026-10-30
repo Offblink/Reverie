@@ -52,6 +52,7 @@ public class Story {
     public String themeId;
     public String themeName;
     public String tier;                 // short | medium | long
+    public String pov = "third";        // 叙述人称（M8）：first=第一人称 | third=第三人称（默认）
     public int choicesTarget;
     public String synopsis = "";
     public long created;
@@ -75,6 +76,7 @@ public class Story {
         o.put("themeId", themeId);
         o.put("themeName", themeName);
         o.put("tier", tier);
+        o.put("pov", pov);
         o.put("choicesTarget", choicesTarget);
         o.put("synopsis", synopsis);
         o.put("created", created);
@@ -93,6 +95,7 @@ public class Story {
         st.themeId = o.optString("themeId");
         st.themeName = o.optString("themeName", st.themeId);
         st.tier = o.optString("tier");
+        st.pov = "first".equals(o.optString("pov", "third")) ? "first" : "third";   // 旧档无此键 → third
         st.choicesTarget = o.optInt("choicesTarget", 10);
         st.synopsis = o.optString("synopsis", "");
         st.created = o.optLong("created");

@@ -40,21 +40,22 @@ public class WhisperClient {
                 .addFormDataPart("file", "speech.wav", RequestBody.create(wav, WAV_T))
                 .build();
 
+        String url = LlmClient.normalizeBase(baseUrl) + "/audio/transcriptions";
         Request.Builder rb = new Request.Builder()
-                .url(baseUrl.replaceAll("/+$", "") + "/audio/transcriptions")
+                .url(url)
                 .post(body);
         if (!apiKey.isEmpty()) rb.header("Authorization", "Bearer " + apiKey);
 
         http.newCall(rb.build()).enqueue(new okhttp3.Callback() {
             @Override public void onFailure(Call c, IOException e) {
-                if (!c.isCanceled()) l.onError("网络失败: " + e.getMessage());
+                if (!c.isCanceled()) l.onError("网络失败 POST " + url + ": " + e.getMessage());
             }
 
             @Override public void onResponse(Call c, Response resp) {
                 try (Response r = resp) {
                     if (!r.isSuccessful()) {
                         String err = r.body() != null ? r.body().string() : "";
-                        l.onError("HTTP " + r.code() + ": " + trim(err, 200));
+                        l.onError(LlmClient.httpError(r.code(), url, err));
                         return;
                     }
                     if (r.body() == null) { l.onError("空响应体"); return; }
@@ -67,11 +68,5 @@ public class WhisperClient {
                 }
             }
         });
-    }
-
-    private static String trim(String s, int n) {
-        if (s == null) return "";
-        s = s.replaceAll("\\s+", " ");
-        return s.length() > n ? s.substring(0, n) + "…" : s;
     }
 }

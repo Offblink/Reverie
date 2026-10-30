@@ -22,6 +22,7 @@ public class Settings {
     private static final String K_ASR_KEY = "asrApiKey";
     private static final String K_TTS_VOICE = "ttsVoice";
     private static final String K_TTS_RATE = "ttsRate";
+    private static final String K_TTS_MODE = "ttsMode";
     private static final String K_MIC_WINDOW = "micWindowSec";
 
     // 默认值：OpenAI 官方口径，用户可全改
@@ -54,24 +55,38 @@ public class Settings {
 
     public String ttsVoice() { return sp.getString(K_TTS_VOICE, DEF_TTS_VOICE); }
     public float ttsRate() { return sp.getFloat(K_TTS_RATE, (float) DEF_TTS_RATE); }
+
+    /** TTS 引擎（M8）：auto=系统优先、无中文引擎自动切端上（默认）| system=只用系统 | device=只用端上 */
+    public String ttsMode() { return sp.getString(K_TTS_MODE, "auto"); }
+
     public int micWindowSec() { return sp.getInt(K_MIC_WINDOW, DEF_MIC_WINDOW_SEC); }
 
     /** JS 下发的 patch 应用：只覆盖出现的键；apiKey 空串视为不改 */
     public void apply(JSONObject patch) throws JSONException {
         SharedPreferences.Editor e = sp.edit();
-        if (patch.has("endpoint")) e.putString(K_ENDPOINT, patch.getString("endpoint"));
+        // 端点在保存时就归一化（去换行/补协议/剥重复路径），设置页回显修正后的值
+        if (patch.has("endpoint")) {
+            e.putString(K_ENDPOINT, org.offblink.reverie.engine.LlmClient.normalizeBase(patch.optString("endpoint")));
+        }
         if (patch.has("apiKey")) {
-            String k = patch.optString("apiKey", "");
+            String k = patch.optString("apiKey", "").replaceAll("[\\r\\n\\t]", "").trim();
             if (!k.isEmpty()) e.putString(K_API_KEY, k);
         }
-        if (patch.has("chatModel")) e.putString(K_CHAT_MODEL, patch.getString("chatModel"));
-        if (patch.has("asrModel")) e.putString(K_ASR_MODEL, patch.getString("asrModel"));
+        if (patch.has("chatModel")) e.putString(K_CHAT_MODEL, patch.getString("chatModel").trim());
+        if (patch.has("asrModel")) e.putString(K_ASR_MODEL, patch.getString("asrModel").trim());
         if (patch.has("asrMode")) e.putString(K_ASR_MODE, "cloud".equals(patch.optString("asrMode")) ? "cloud" : "device");
         // asrEndpoint 允许写空串（= 回落跟随 LLM）；asrApiKey 与主 apiKey 同口径：空 = 不改
-        if (patch.has("asrEndpoint")) e.putString(K_ASR_ENDPOINT, patch.optString("asrEndpoint", ""));
+        if (patch.has("asrEndpoint")) {
+            e.putString(K_ASR_ENDPOINT, org.offblink.reverie.engine.LlmClient.normalizeBase(patch.optString("asrEndpoint")));
+        }
         if (patch.has("asrApiKey")) {
-            String k = patch.optString("asrApiKey", "");
+            String k = patch.optString("asrApiKey", "").replaceAll("[\\r\\n\\t]", "").trim();
             if (!k.isEmpty()) e.putString(K_ASR_KEY, k);
+        }
+        // TTS 引擎（M8）：auto=系统优先、无中文时自动切端上 | system | device；其余回落 auto
+        if (patch.has("ttsMode")) {
+            String m = patch.optString("ttsMode", "auto");
+            e.putString(K_TTS_MODE, ("system".equals(m) || "device".equals(m)) ? m : "auto");
         }
         if (patch.has("ttsVoice")) e.putString(K_TTS_VOICE, patch.optString("ttsVoice", ""));
         if (patch.has("ttsRate")) {
@@ -97,6 +112,7 @@ public class Settings {
         o.put("hasAsrKey", !asrApiKey().isEmpty());
         o.put("ttsVoice", ttsVoice());
         o.put("ttsRate", ttsRate());
+        o.put("ttsMode", ttsMode());
         o.put("micWindowSec", micWindowSec());
         return o;
     }

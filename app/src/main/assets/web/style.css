@@ -191,6 +191,43 @@ button { font-family: inherit; color: inherit; background: none; border: 0; curs
    ============================================================ */
 .shelf-hint { margin: 10px 2px 0; text-align: right; }
 
+/* 分段胶囊选择器（M8，替代原生 select/radio）：与首页 tier-pill 同语言 */
+.seg-ctl {
+  display: flex; gap: 6px; margin-top: 9px; padding: 3px;
+  background: rgba(255,255,255,.04); border-radius: 14px;
+  border: .5px solid var(--line);
+}
+.seg-ctl button {
+  flex: 1; padding: 8px 0; border-radius: 11px; font-size: 13px;
+  letter-spacing: .06em; color: var(--ink3);
+  transition: background var(--damped), color var(--damped);
+}
+.seg-ctl button.sel {
+  color: var(--ink); font-weight: 700;
+  background: var(--accent-dim); border: .5px solid var(--accent);
+}
+.seg-hint { margin-top: 7px; }
+
+/* 抽屉选择行（音色）：整行可点，右侧箭头示意可展开 */
+.set-pick { width: 100%; text-align: left; }
+.pick-val {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 5px; font-size: 14px; color: var(--ink);
+}
+.pick-arrow { color: var(--ink3); font-size: 17px; }
+.pick-list {
+  max-height: 46vh; overflow-y: auto; margin-bottom: 14px;
+  -webkit-overflow-scrolling: touch;
+}
+.pick-item {
+  width: 100%; text-align: left; padding: 12px 14px; border-radius: 13px;
+  font-size: 14px; color: var(--ink2); display: flex; justify-content: space-between;
+  transition: background var(--damped);
+}
+.pick-item:active { background: rgba(255,255,255,.05); }
+.pick-item.sel { color: var(--accent); font-weight: 700; background: var(--accent-dim); }
+.pick-item .tick { font-weight: 700; }
+
 .confirm-mask {
   position: fixed; inset: 0; z-index: 90; display: none;
   align-items: flex-end; justify-content: center;
@@ -211,10 +248,3 @@ button { font-family: inherit; color: inherit; background: none; border: 0; curs
 .confirm-panel .crow button:active { transform: scale(.96); }
 .confirm-panel .cno { color: var(--ink); border: .5px solid var(--glass-border); }
 .confirm-panel .cdel { color: #fff; background: var(--danger); font-weight: 700; }
-
-.set-row select {
-  width: 100%; margin-top: 5px; padding: 0; border: 0; outline: none;
-  background: none; color: var(--ink); font-family: inherit; font-size: 14px;
-  -webkit-appearance: none; appearance: none;
-}
-.set-row select option { background: var(--bg2); color: var(--ink); }

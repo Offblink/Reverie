@@ -113,7 +113,8 @@ public class ReverieBridge {
     public String newStory(String argsJson) {
         try {
             JSONObject a = new JSONObject(argsJson);
-            String id = engine.newStory(a.getString("theme"), a.getString("tier"));
+            String id = engine.newStory(a.getString("theme"), a.getString("tier"),
+                    a.optString("pov", "third"));
             JSONObject o = new JSONObject();
             o.put("id", id);
             return o.toString();
