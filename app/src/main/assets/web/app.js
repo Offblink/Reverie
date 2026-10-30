@@ -292,6 +292,11 @@
     toast(r && r.ok ? '自检中，请对着手机说话…' : '现在不能自检（正在录音或生成中）');
   });
   $('diag-refresh-btn').addEventListener('click', refreshDiag);
+  $('diag-copy-btn').addEventListener('click', function () {
+    var txt = $('diag-log').textContent || '';
+    var r = bridge('copyText', { text: txt });
+    toast(r && r.ok ? '日志已复制到剪贴板（' + txt.length + ' 字）' : '复制失败');
+  });
   $('diag-auto-btn').addEventListener('click', function () {
     if (diagTimer) {
       clearInterval(diagTimer); diagTimer = 0; this.classList.remove('on');

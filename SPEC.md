@@ -74,6 +74,7 @@
 | `previewTts` | `{name}` | `{ok}` 试听该音色（单念一句固定文案，不改默认；生成中拒绝） |
 | `getDiag` | `{n?}` | 最近 n 条诊断日志（字符串数组）；设置页诊断面板用 |
 | `micTest` | `{sec?}` | `{ok}` 麦克风自检（只测电平，默认 6s）；结果经 `mic-test`/`asr-level` 事件回 JS |
+| `copyText` | `{text}` | `{ok}` 写系统剪贴板（file:// 下 navigator.clipboard 不可靠，走原生） |
 | `testEndpoint` | — | `{ok, latencyMs, msg}` 连通性探测 |
 | `startAsr` / `stopAsr` | — | `{ok}` / `{ok, needPermission}`（无 RECORD_AUDIO 时先弹系统授权） |
 

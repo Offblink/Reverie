@@ -120,6 +120,27 @@ public class ReverieBridge {
         }
     }
 
+    /**
+     * 复制文本到系统剪贴板（M10）：{text} → {ok}。
+     * WebView 跑在 file:// 下 navigator.clipboard 不可靠，走原生 ClipboardManager。
+     */
+    @JavascriptInterface
+    public String copyText(String argsJson) {
+        try {
+            String text = new JSONObject(argsJson).optString("text", "");
+            if (act == null || text.isEmpty()) return "{\"ok\":false}";
+            android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                    act.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            if (cm == null) return "{\"ok\":false}";
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("reverie-diag", text));
+            JSONObject o = new JSONObject();
+            o.put("ok", true);
+            return o.toString();
+        } catch (Exception e) {
+            return err(e);
+        }
+    }
+
     /** 麦克风自检（M10）：{sec?} → {ok}；结果经 mic-test / asr-level 事件回 JS */
     @JavascriptInterface
     public String micTest(String argsJson) {
